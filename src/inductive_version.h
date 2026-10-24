@@ -16,6 +16,6 @@
  * name; the editors send it as X-Inductive-Version, so the server can turn away a
  * release too old for its API with a download link (MIN_CLIENT_VERSION).
  */
-#define INDUCTIVE_VERSION "1.0.0"
+#define INDUCTIVE_VERSION "1.1.0"
 
 #endif
