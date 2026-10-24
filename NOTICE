@@ -1,0 +1,22 @@
+Inductive desktop app
+
+Copyright (C) 2026 the Inductive authors.
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+It is based on KiCad (https://www.kicad.org), copyright the KiCad developers, and is
+distributed under the same terms.
+
+Trademarks. Under section 7(e) of the GNU GPL, this license does not grant rights to
+the name "Inductive" or to the Inductive logo and icon (brand/). Modified versions
+must not use them in a way that suggests they come from Inductive.
+
+Inductive's online services (the design assistant, board layout and parts sourcing)
+are separate programs that run on Inductive's servers. They are not part of this
+program and are not covered by this license.

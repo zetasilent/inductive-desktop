@@ -1,0 +1,99 @@
+diff --git a/common/single_top.cpp b/common/single_top.cpp
+index 47e07280a6..2ec30d7f3d 100644
+--- a/common/single_top.cpp
++++ b/common/single_top.cpp
+@@ -330,6 +330,16 @@ struct APP_SINGLE_TOP : public wxApp
+         Pgm().MacOpenFile( aFileName );
+     }
+ 
++    /**
++     * wxWidgets stops its launch loop here; without an event behind the stop, the loop
++     * waits for user input before OnInit() runs (see KIPLATFORM::APP::WakeEventLoop).
++     */
++    void OSXOnDidFinishLaunching() override
++    {
++        wxApp::OSXOnDidFinishLaunching();
++        KIPLATFORM::APP::WakeEventLoop();
++    }
++
+ #endif
+ };
+ 
+diff --git a/kicad/kicad.cpp b/kicad/kicad.cpp
+index ea10acd812..78d7568c7e 100644
+--- a/kicad/kicad.cpp
++++ b/kicad/kicad.cpp
+@@ -660,6 +660,16 @@ struct APP_KICAD : public wxApp
+     {
+         Pgm().MacOpenFile( aFileName );
+     }
++
++    /**
++     * wxWidgets stops its launch loop here; without an event behind the stop, the loop
++     * waits for user input before OnInit() runs (see KIPLATFORM::APP::WakeEventLoop).
++     */
++    void OSXOnDidFinishLaunching() override
++    {
++        wxApp::OSXOnDidFinishLaunching();
++        KIPLATFORM::APP::WakeEventLoop();
++    }
+ #endif
+ };
+ 
+diff --git a/libs/kiplatform/include/kiplatform/app.h b/libs/kiplatform/include/kiplatform/app.h
+index 42e4fc5eec..90905eb96e 100644
+--- a/libs/kiplatform/include/kiplatform/app.h
++++ b/libs/kiplatform/include/kiplatform/app.h
+@@ -110,6 +110,17 @@ namespace KIPLATFORM
+          * @param aPath is the full path to insert
+          */
+         void AddDynamicLibrarySearchPath( const wxString& aPath );
++
++#ifdef __APPLE__
++        /**
++         * Wake the main event loop with an empty event. Call from wxApp::OSXOnDidFinishLaunching():
++         * wxWidgets stops [NSApp run] there, and AppKit only acts on the stop when the next event
++         * arrives. Launched with a document, the event wxWidgets queued for this is consumed
++         * before the stop, so OnInit() waited for the user's next mouse move or click -- seconds
++         * or minutes with no window.
++         */
++        void WakeEventLoop();
++#endif
+     }
+ }
+ 
+diff --git a/libs/kiplatform/os/apple/app.mm b/libs/kiplatform/os/apple/app.mm
+index 3092eacc73..de535c3c97 100644
+--- a/libs/kiplatform/os/apple/app.mm
++++ b/libs/kiplatform/os/apple/app.mm
+@@ -20,6 +20,8 @@
+ 
+ #include <kiplatform/app.h>
+ 
++#import <AppKit/AppKit.h>
++
+ #include <wx/string.h>
+ #include <wx/sysopt.h>
+ 
+@@ -86,6 +88,21 @@
+ }
+ 
+ 
++void KIPLATFORM::APP::WakeEventLoop()
++{
++    NSEvent* event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
++                                        location:NSMakePoint( 0.0, 0.0 )
++                                   modifierFlags:0
++                                       timestamp:0
++                                    windowNumber:0
++                                         context:nil
++                                         subtype:0
++                                           data1:0
++                                           data2:0];
++    [NSApp postEvent:event atStart:YES];
++}
++
++
+ void KIPLATFORM::APP::AddDynamicLibrarySearchPath( const wxString& aPath )
+ {
+ }

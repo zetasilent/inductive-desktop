@@ -1,0 +1,18 @@
+diff --git a/pcbnew/footprint.cpp b/pcbnew/footprint.cpp
+index 949948704c..8d4b961733 100644
+--- a/pcbnew/footprint.cpp
++++ b/pcbnew/footprint.cpp
+@@ -1513,8 +1513,11 @@ void FOOTPRINT::Add( BOARD_ITEM* aBoardItem, ADD_MODE aMode, bool aSkipConnectiv
+     aBoardItem->ClearEditFlags();
+     aBoardItem->SetParent( this );
+ 
+-    // If this footprint is on a board, update the board's item-by-id cache
+-    if( BOARD* board = GetBoard() )
++    // If this footprint is on a board, update the board's item-by-id cache -- when the
++    // board indexes this footprint itself. A copy (an undo image, a clone being measured)
++    // keeps its parent board and its children's UUIDs; indexing those would point DRC's
++    // and the router's keep-out lookups at the copy, where the footprint used to be.
++    if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
+         board->CacheItemSubtreeById( aBoardItem );
+ 
+     InvalidateGeometryCaches();

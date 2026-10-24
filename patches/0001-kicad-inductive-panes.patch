@@ -1,0 +1,570 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 420f18bcb4..0491ac3eb5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -741,7 +741,7 @@ else()
+         CACHE PATH "Location of KiCad binaries." FORCE )
+ 
+     # some paths to single app bundle
+-    set( OSX_BUNDLE_MAIN "KiCad.app" )
++    set( OSX_BUNDLE_MAIN "Inductive.app" )
+     set( OSX_BUNDLE_BIN_DIR "Contents/MacOS" )
+     set( OSX_BUNDLE_LIB_DIR "Contents/Frameworks" )
+     set( OSX_BUNDLE_KIFACE_DIR "Contents/PlugIns" )
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index eb808f63be..7b9ecbd2cb 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -225,6 +225,9 @@ set( KICOMMON_SRCS
+     widgets/kistatusbar.cpp
+     widgets/number_badge.cpp
+     widgets/progress_reporter_base.cpp
++    widgets/inductive_panel.cpp
++    widgets/inductive_nav_panel.cpp
++    widgets/inductive_cloud_auth.cpp
+     widgets/report_severity.cpp
+     widgets/std_bitmap_button.cpp
+     widgets/ui_common.cpp
+@@ -351,6 +354,11 @@ if( KICAD_IPC_API )
+     )
+ endif()
+ 
++# Inductive: compile-in the location of the sidebar web assets.  $INDUCTIVE_WEB_DIR
++# overrides this at runtime, so the panel can be iterated on without a rebuild.
++set_source_files_properties( widgets/inductive_panel.cpp PROPERTIES
++    COMPILE_DEFINITIONS "INDUCTIVE_WEB_DIR=\"${CMAKE_SOURCE_DIR}/inductive/web\"" )
++
+ add_library( kicommon SHARED
+     ${KICOMMON_SRCS}
+     )
+diff --git a/eeschema/CMakeLists.txt b/eeschema/CMakeLists.txt
+index 7b853e621c..4d50026dbd 100644
+--- a/eeschema/CMakeLists.txt
++++ b/eeschema/CMakeLists.txt
+@@ -400,6 +400,7 @@ set( EESCHEMA_SRCS
+     sch_commit.cpp
+     sch_connection.cpp
+     sch_draw_panel.cpp
++    inductive_sch_tools.cpp
+     sch_edit_frame.cpp
+     sch_field.cpp
+     sch_footprint_field_reconciler.cpp
+@@ -562,15 +563,16 @@ set_source_files_properties( dialogs/dialog_user_defined_signals.cpp
+ 
+ if( APPLE )
+     # setup bundle
+-    set( EESCHEMA_RESOURCES eeschema.icns eeschema_doc.icns libedit.icns libedit_doc.icns )
++    set( EESCHEMA_RESOURCES inductive.icns eeschema.icns eeschema_doc.icns libedit.icns libedit_doc.icns )
+     set_source_files_properties(
++        "${CMAKE_CURRENT_SOURCE_DIR}/inductive.icns"
+         "${CMAKE_CURRENT_SOURCE_DIR}/eeschema.icns"
+         "${CMAKE_CURRENT_SOURCE_DIR}/eeschema_doc.icns"
+         "${CMAKE_CURRENT_SOURCE_DIR}/libedit.icns"
+         "${CMAKE_CURRENT_SOURCE_DIR}/libedit_doc.icns"
+         PROPERTIES MACOSX_PACKAGE_LOCATION Resources
+         )
+-    set( MACOSX_BUNDLE_ICON_FILE eeschema.icns )
++    set( MACOSX_BUNDLE_ICON_FILE inductive.icns )
+     set( MACOSX_BUNDLE_GUI_IDENTIFIER org.kicad.kicad )
+     set( MACOSX_BUNDLE_NAME eeschema )
+ endif()
+@@ -693,6 +695,7 @@ target_link_options( eeschema PRIVATE
+ # these 2 binaries are a matched set, keep them together:
+ if( APPLE )
+     set_target_properties( eeschema PROPERTIES
++        OUTPUT_NAME "Inductive Schematic"
+         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/eeschema/Info.plist
+         )
+ 
+@@ -737,7 +740,7 @@ if( APPLE )
+         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )
+ 
+         # Install any dependencies (this will generally duplicate kicad.app but we can't be sure)
+-        install_runtime_deps( "${KICAD_BIN}/eeschema.app/Contents/MacOS/eeschema"
++        install_runtime_deps( "${KICAD_BIN}/Inductive Schematic.app/Contents/MacOS/Inductive Schematic"
+             "${OSX_BUNDLE_BUILD_KIFACE_DIR}/_eeschema.kiface"
+             ""
+             )
+diff --git a/eeschema/sch_edit_frame.cpp b/eeschema/sch_edit_frame.cpp
+index 82bb8deb32..390c12dbc9 100644
+--- a/eeschema/sch_edit_frame.cpp
++++ b/eeschema/sch_edit_frame.cpp
+@@ -104,6 +104,11 @@
+ #include <view/view_controls.h>
+ #include <widgets/wx_infobar.h>
+ #include <widgets/hierarchy_pane.h>
++#include <widgets/inductive_panel.h>
++#include <widgets/inductive_nav_panel.h>
++#include <inductive_sch_tools.h>
++#include <sch_reference_list.h>
++#include <nlohmann/json.hpp>
+ #include <widgets/bitmap_button.h>
+ #include <widgets/sch_properties_panel.h>
+ #include <widgets/sch_search_pane.h>
+@@ -240,6 +245,10 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+     m_selectionFilterPanel = new PANEL_SCH_SELECTION_FILTER( this );
+     m_designBlocksPane = new SCH_DESIGN_BLOCK_PANE( this, nullptr, m_designBlockHistoryList );
+ 
++    m_inductivePanel = new INDUCTIVE_PANEL( this );
++    // Owned by this frame like any child window; AUI finds it by name afterwards.
++    INDUCTIVE_NAV_PANEL* inductiveNav = new INDUCTIVE_NAV_PANEL( this, m_inductivePanel );
++
+     m_auimgr.SetManagedWindow( this );
+ 
+     CreateInfoBar();
+@@ -269,6 +278,39 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+                       .FloatingPosition( FromDIP( wxPoint( 50, 50 ) ) )
+                       .Show( false ) );
+ 
++    m_auimgr.AddPane( m_inductivePanel, EDA_PANE().Palette().Name( INDUCTIVE_PANEL::PaneName() )
++                      .Caption( _( "Inductive" ) )
++                      .CaptionVisible( false )
++                      .PaneBorder( false )
++                      .Right().Layer( 7 ).Position( 0 )
++                      .TopDockable( false )
++                      .BottomDockable( false )
++                      .LeftDockable( false )
++                      .Floatable( false )
++                      .Movable( false )
++                      .CloseButton( false )
++                      .MinSize( FromDIP( wxSize( 260, 200 ) ) )
++                      .BestSize( FromDIP( wxSize( 380, 900 ) ) )
++                      .FloatingSize( FromDIP( wxSize( 420, 900 ) ) )
++                      .Show( true ) );
++
++    // Search, customize, this project's chats and the account: on the far left,
++    // the way the chat is on the far right.
++    m_auimgr.AddPane( inductiveNav, EDA_PANE().Palette().Name( INDUCTIVE_NAV_PANEL::PaneName() )
++                      .Caption( _( "Inductive" ) )
++                      .CaptionVisible( false )
++                      .PaneBorder( false )
++                      .Left().Layer( 7 ).Position( 0 )
++                      .TopDockable( false )
++                      .BottomDockable( false )
++                      .RightDockable( false )
++                      .Floatable( false )
++                      .Movable( false )
++                      .CloseButton( false )
++                      .MinSize( FromDIP( wxSize( 200, 200 ) ) )
++                      .BestSize( FromDIP( wxSize( 250, 900 ) ) )
++                      .Show( true ) );
++
+     m_auimgr.AddPane( m_propertiesPanel, defaultPropertiesPaneInfo( this ) );
+     m_auimgr.AddPane( m_selectionFilterPanel, defaultSchSelectionFilterPaneInfo( this ) );
+ 
+@@ -299,9 +341,31 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+                       .DestroyOnClose( false )
+                       .Show( m_show_search ) );
+ 
++    // Everything Inductive adds to the schematic editor lives in
++    // inductive_sch_tools.cpp, so it stays in Inductive's own tree and this
++    // patch stays one line.  See inductive_board_tools.cpp for the board half.
++    InductiveInstallSchematicTools( this, m_inductivePanel );
++
+     RestoreAuiLayout();
+     FinishAUIInitialization();
+ 
++    // A perspective saved before Inductive existed does not mention this pane, and
++    // wx 3.2's LoadPerspective() hides whatever it does not know about.  KiCad's
++    // own workaround above only re-shows toolbars, so palettes need this.
++    if( wxAuiPaneInfo& inductivePane = m_auimgr.GetPane( INDUCTIVE_PANEL::PaneName() );
++        inductivePane.IsOk() && !inductivePane.IsShown() )
++    {
++        inductivePane.Show( true );
++        m_auimgr.Update();
++    }
++
++    if( wxAuiPaneInfo& navPane = m_auimgr.GetPane( INDUCTIVE_NAV_PANEL::PaneName() );
++        navPane.IsOk() && !navPane.IsShown() )
++    {
++        navPane.Show( true );
++        m_auimgr.Update();
++    }
++
+     wxAuiPaneInfo& hierarchy_pane = m_auimgr.GetPane( SchematicHierarchyPaneName() );
+     wxAuiPaneInfo& netNavigatorPane = m_auimgr.GetPane( NetNavigatorPaneName() );
+     wxAuiPaneInfo& propertiesPane = m_auimgr.GetPane( PropertiesPaneName() );
+diff --git a/eeschema/sch_edit_frame.h b/eeschema/sch_edit_frame.h
+index 1484d3933c..4fb4670b87 100644
+--- a/eeschema/sch_edit_frame.h
++++ b/eeschema/sch_edit_frame.h
+@@ -65,6 +65,7 @@ class DIALOG_ERC;
+ class DIALOG_SYMBOL_FIELDS_TABLE;
+ class RESCUER;
+ class HIERARCHY_PANE;
++class INDUCTIVE_PANEL;
+ class API_HANDLER_SCH;
+ class DIALOG_SCHEMATIC_SETUP;
+ class PROGRESS_REPORTER;
+@@ -1074,6 +1075,7 @@ private:
+     DIALOG_ERC*                 m_ercDialog;
+     DIALOG_BOOK_REPORTER*       m_diffSymbolDialog;
+     HIERARCHY_PANE*             m_hierarchy;
++    INDUCTIVE_PANEL*              m_inductivePanel;   ///< Inductive conversational sidebar
+     DIALOG_SYMBOL_FIELDS_TABLE* m_symbolFieldsTableDialog;
+     DIALOG_SCHEMATIC_SETUP*     m_schematicSetupDialog;
+ 
+diff --git a/kicad/CMakeLists.txt b/kicad/CMakeLists.txt
+index dae7b75fe2..b98c796529 100644
+--- a/kicad/CMakeLists.txt
++++ b/kicad/CMakeLists.txt
+@@ -98,14 +98,17 @@ if( WIN32 )
+ endif()
+ 
+ if( APPLE )
+-    set( KICAD_RESOURCES kicad.icns kicad_doc.icns )
++    set( KICAD_RESOURCES inductive.icns kicad.icns kicad_doc.icns )
++    set_source_files_properties( "${CMAKE_CURRENT_SOURCE_DIR}/inductive.icns" PROPERTIES
++        MACOSX_PACKAGE_LOCATION Resources
++        )
+     set_source_files_properties( "${CMAKE_CURRENT_SOURCE_DIR}/kicad.icns" PROPERTIES
+         MACOSX_PACKAGE_LOCATION Resources
+         )
+     set_source_files_properties( "${CMAKE_CURRENT_SOURCE_DIR}/kicad_doc.icns"  PROPERTIES
+         MACOSX_PACKAGE_LOCATION Resources
+         )
+-    set( MACOSX_BUNDLE_ICON_FILE kicad.icns )
++    set( MACOSX_BUNDLE_ICON_FILE inductive.icns )
+     set( MACOSX_BUNDLE_GUI_IDENTIFIER org.kicad.kicad )
+     set( MACOSX_BUNDLE_NAME kicad )
+ endif()
+@@ -151,6 +154,7 @@ endif()
+ 
+ if( APPLE )
+     set_target_properties( kicad PROPERTIES
++        OUTPUT_NAME "Inductive"
+         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/kicad/Info.plist
+         )
+     target_link_libraries( kicad
+@@ -248,7 +252,7 @@ if( APPLE )
+         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )
+ 
+         # Install the main bundle
+-        install_runtime_deps( "${OSX_BUNDLE_INSTALL_BIN_DIR}/kicad"
++        install_runtime_deps( "${OSX_BUNDLE_INSTALL_BIN_DIR}/Inductive"
+             ""
+             ""
+             )
+@@ -277,10 +281,10 @@ if( APPLE )
+ 
+         # move all app bundles
+         move_to_main_bundle( \"bitmap2component.app\" \"Image Converter.app\" )
+-        move_to_main_bundle( \"eeschema.app\" \"Schematic Editor.app\" )
++        move_to_main_bundle( \"Inductive Schematic.app\" \"Inductive Schematic.app\" )
+         move_to_main_bundle( \"gerbview.app\" \"GerbView.app\" )
+         move_to_main_bundle( \"pcb_calculator.app\" \"PCB Calculator.app\" )
+-        move_to_main_bundle( \"pcbnew.app\" \"PCB Editor.app\" )
++        move_to_main_bundle( \"Inductive PCB.app\" \"Inductive PCB.app\" )
+         move_to_main_bundle( \"pl_editor.app\" \"Page Layout Editor.app\" )
+ 
+         cmake_policy( SET CMP0012 NEW )
+diff --git a/pcbnew/CMakeLists.txt b/pcbnew/CMakeLists.txt
+index 276772bb3b..bcad7581b5 100644
+--- a/pcbnew/CMakeLists.txt
++++ b/pcbnew/CMakeLists.txt
+@@ -416,6 +416,7 @@ set( PCBNEW_CLASS_SRCS
+     layer_pairs.cpp
+     load_select_footprint.cpp
+     menubar_footprint_editor.cpp
++    inductive_board_tools.cpp
+     menubar_pcb_editor.cpp
+     padstack.cpp
+     pcb_base_edit_frame.cpp
+@@ -762,7 +763,10 @@ set_source_files_properties(dialogs/dialog_tablecell_properties.cpp
+ 
+ if( APPLE )
+ #setup bundle
+-    set( PCBNEW_RESOURCES pcbnew.icns pcbnew_doc.icns fpedit.icns fpedit_doc.icns )
++    set( PCBNEW_RESOURCES inductive.icns pcbnew.icns pcbnew_doc.icns fpedit.icns fpedit_doc.icns )
++    set_source_files_properties( "${CMAKE_CURRENT_SOURCE_DIR}/inductive.icns" PROPERTIES
++        MACOSX_PACKAGE_LOCATION Resources
++        )
+     set_source_files_properties(
+         "${CMAKE_CURRENT_SOURCE_DIR}/pcbnew.icns"
+         "${CMAKE_CURRENT_SOURCE_DIR}/pcbnew_doc.icns"
+@@ -770,7 +774,7 @@ if( APPLE )
+         "${CMAKE_CURRENT_SOURCE_DIR}/fpedit_doc.icns"
+         PROPERTIES MACOSX_PACKAGE_LOCATION Resources
+         )
+-    set( MACOSX_BUNDLE_ICON_FILE pcbnew.icns )
++    set( MACOSX_BUNDLE_ICON_FILE inductive.icns )
+     set( MACOSX_BUNDLE_GUI_IDENTIFIER org.kicad.kicad )
+     set( MACOSX_BUNDLE_NAME pcbnew )
+ endif()
+@@ -927,6 +931,7 @@ endif()
+ #these 2 binaries are a matched set, keep them together:
+ if( APPLE )
+     set_target_properties( pcbnew PROPERTIES
++        OUTPUT_NAME "Inductive PCB"
+         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/pcbnew/Info.plist
+         )
+ 
+@@ -961,7 +966,7 @@ if( APPLE )
+         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )
+ 
+ #Install any dependencies
+-        install_runtime_deps( "${KICAD_BIN}/pcbnew.app/Contents/MacOS/pcbnew"
++        install_runtime_deps( "${KICAD_BIN}/Inductive PCB.app/Contents/MacOS/Inductive PCB"
+             "${OSX_BUNDLE_BUILD_KIFACE_DIR}/_pcbnew.kiface"
+             ""
+             )
+diff --git a/pcbnew/pcb_edit_frame.cpp b/pcbnew/pcb_edit_frame.cpp
+index 37b2b6433a..0d0db5cdce 100644
+--- a/pcbnew/pcb_edit_frame.cpp
++++ b/pcbnew/pcb_edit_frame.cpp
+@@ -124,6 +124,14 @@
+ #include <dialog_drc.h>     // for DIALOG_DRC_WINDOW_NAME definition
+ #include <ratsnest/ratsnest_view_item.h>
+ #include <widgets/appearance_controls.h>
++#include <widgets/inductive_panel.h>
++#include <widgets/inductive_nav_panel.h>
++#include <inductive_board_tools.h>
++#include <pcbplot.h>
++#include <pcb_plotter.h>
++#include <base_units.h>
++#include <board_commit.h>
++#include <nlohmann/json.hpp>
+ #include <widgets/pcb_design_block_pane.h>
+ #include <widgets/pcb_search_pane.h>
+ #include <widgets/wx_infobar.h>
+@@ -302,6 +310,9 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+ 
+     m_appearancePanel = new APPEARANCE_CONTROLS( this, GetCanvas() );
+     m_searchPane = new PCB_SEARCH_PANE( this );
++    m_inductivePanel = new INDUCTIVE_PANEL( this );
++    // Owned by this frame like any child window; AUI finds it by name afterwards.
++    INDUCTIVE_NAV_PANEL* inductiveNav = new INDUCTIVE_NAV_PANEL( this, m_inductivePanel );
+     m_netInspectorPanel = new PCB_NET_INSPECTOR_PANEL( this, this );
+     m_designBlocksPane = new PCB_DESIGN_BLOCK_PANE( this, nullptr, m_designBlockHistoryList );
+ 
+@@ -390,6 +401,39 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+                       .CloseButton( true ) );
+ 
+     // Center
++    m_auimgr.AddPane( m_inductivePanel, EDA_PANE().Palette().Name( INDUCTIVE_PANEL::PaneName() )
++                      .Caption( _( "Inductive" ) )
++                      .CaptionVisible( false )
++                      .PaneBorder( false )
++                      .Right().Layer( 7 ).Position( 0 )
++                      .TopDockable( false )
++                      .BottomDockable( false )
++                      .LeftDockable( false )
++                      .Floatable( false )
++                      .Movable( false )
++                      .CloseButton( false )
++                      .MinSize( FromDIP( wxSize( 260, 200 ) ) )
++                      .BestSize( FromDIP( wxSize( 380, 900 ) ) )
++                      .FloatingSize( FromDIP( wxSize( 420, 900 ) ) )
++                      .Show( true ) );
++
++    // Search, customize, this project's chats and the account: on the far left,
++    // the way the chat is on the far right.
++    m_auimgr.AddPane( inductiveNav, EDA_PANE().Palette().Name( INDUCTIVE_NAV_PANEL::PaneName() )
++                      .Caption( _( "Inductive" ) )
++                      .CaptionVisible( false )
++                      .PaneBorder( false )
++                      .Left().Layer( 7 ).Position( 0 )
++                      .TopDockable( false )
++                      .BottomDockable( false )
++                      .RightDockable( false )
++                      .Floatable( false )
++                      .Movable( false )
++                      .CloseButton( false )
++                      .MinSize( FromDIP( wxSize( 200, 200 ) ) )
++                      .BestSize( FromDIP( wxSize( 250, 900 ) ) )
++                      .Show( true ) );
++
+     m_auimgr.AddPane( GetCanvas(), EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
+                       .Center() );
+ 
+@@ -411,8 +455,31 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+                       .DestroyOnClose( false )
+                       .CloseButton( true ) );
+ 
++    // Everything Inductive adds to the board editor -- the document summary the
++    // model is shown, the slash commands, and the tools it may call -- lives in
++    // inductive_board_tools.cpp so that it stays in Inductive's own tree and this
++    // patch stays one line.
++    InductiveInstallBoardTools( this, m_inductivePanel );
++
+     RestoreAuiLayout();
+ 
++    // A perspective saved before Inductive existed does not mention this pane, and
++    // wx 3.2's LoadPerspective() hides whatever it does not know about.  KiCad's
++    // own workaround above only re-shows toolbars, so palettes need this.
++    if( wxAuiPaneInfo& inductivePane = m_auimgr.GetPane( INDUCTIVE_PANEL::PaneName() );
++        inductivePane.IsOk() && !inductivePane.IsShown() )
++    {
++        inductivePane.Show( true );
++        m_auimgr.Update();
++    }
++
++    if( wxAuiPaneInfo& navPane = m_auimgr.GetPane( INDUCTIVE_NAV_PANEL::PaneName() );
++        navPane.IsOk() && !navPane.IsShown() )
++    {
++        navPane.Show( true );
++        m_auimgr.Update();
++    }
++
+     m_auimgr.GetPane( "LayersManager" ).Show( m_ShowLayerManagerTools );
+     m_auimgr.GetPane( "SelectionFilter" ).Show( m_ShowLayerManagerTools );
+     m_auimgr.GetPane( PropertiesPaneName() ).Show( GetPcbNewSettings()->m_AuiPanels.show_properties );
+diff --git a/pcbnew/pcb_edit_frame.h b/pcbnew/pcb_edit_frame.h
+index 506a0a5a97..8ae2a552df 100644
+--- a/pcbnew/pcb_edit_frame.h
++++ b/pcbnew/pcb_edit_frame.h
+@@ -44,6 +44,7 @@ class PCB_GROUP;
+ class PCB_DIMENSION_BASE;
+ class DRC;
+ class DIALOG_FIND;
++class INDUCTIVE_PANEL;
+ class DIALOG_PLOT;
+ class ZONE;
+ class GENERAL_COLLECTOR;
+@@ -897,6 +898,9 @@ private:
+     std::vector<LIB_ID>    m_designBlockHistoryList;
+     PCB_DESIGN_BLOCK_PANE* m_designBlocksPane;
+ 
++    /// Inductive conversational design sidebar.
++    INDUCTIVE_PANEL*         m_inductivePanel = nullptr;
++
+     /// Secondary infobar that stacks above the main one; reserved for load-time
+     /// notices (currently the WRL -> STEP migration prompt) that must not be
+     /// stomped by later infobar messages such as read-only warnings or DRC
+diff --git a/resources/macos/plist/bitmap2component.Info.plist.in b/resources/macos/plist/bitmap2component.Info.plist.in
+index 75b73dff94..79c68e6d98 100644
+--- a/resources/macos/plist/bitmap2component.Info.plist.in
++++ b/resources/macos/plist/bitmap2component.Info.plist.in
+@@ -7,10 +7,10 @@
+     <key>CFBundleExecutable</key>             <string>bitmap2component</string>
+     <key>CFBundleGetInfoString</key>          <string></string>
+     <key>CFBundleIconFile</key>               <string>bitmap2component.icns</string>
+-    <key>CFBundleIdentifier</key>             <string>org.kicad.bitmap2component</string>
++    <key>CFBundleIdentifier</key>             <string>com.inductive.bitmap2component</string>
+     <key>CFBundleInfoDictionaryVersion</key>  <string>6.0</string>
+     <key>CFBundleLongVersionString</key>      <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                   <string>Image Converter</string>
++    <key>CFBundleName</key>                   <string>Inductive Image Converter</string>
+     <key>CFBundlePackageType</key>            <string>APPL</string>
+     <key>CFBundleShortVersionString</key>     <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>              <string>????</string>
+diff --git a/resources/macos/plist/eeschema.Info.plist.in b/resources/macos/plist/eeschema.Info.plist.in
+index ceb6a52497..610ef9fe6a 100644
+--- a/resources/macos/plist/eeschema.Info.plist.in
++++ b/resources/macos/plist/eeschema.Info.plist.in
+@@ -27,13 +27,14 @@
+             </dict>
+         </array>
+     <key>CFBundleDevelopmentRegion</key>            <string>English</string>
+-    <key>CFBundleExecutable</key>                   <string>eeschema</string>
++    <key>CFBundleDisplayName</key>              <string>Inductive Schematic</string>
++    <key>CFBundleExecutable</key>                   <string>Inductive Schematic</string>
+     <key>CFBundleGetInfoString</key>                <string></string>
+-    <key>CFBundleIconFile</key>                     <string>eeschema.icns</string>
+-    <key>CFBundleIdentifier</key>                   <string>org.kicad.eeschema</string>
++    <key>CFBundleIconFile</key>                     <string>inductive.icns</string>
++    <key>CFBundleIdentifier</key>                   <string>com.inductive.eeschema</string>
+     <key>CFBundleInfoDictionaryVersion</key>        <string>6.0</string>
+     <key>CFBundleLongVersionString</key>            <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                         <string>Schematic Editor</string>
++    <key>CFBundleName</key>                         <string>Inductive Schematic</string>
+     <key>CFBundlePackageType</key>                  <string>APPL</string>
+     <key>CFBundleShortVersionString</key>           <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>                    <string>????</string>
+diff --git a/resources/macos/plist/gerbview.Info.plist.in b/resources/macos/plist/gerbview.Info.plist.in
+index 3c0600cff0..7dd2029b7a 100644
+--- a/resources/macos/plist/gerbview.Info.plist.in
++++ b/resources/macos/plist/gerbview.Info.plist.in
+@@ -39,10 +39,10 @@
+     <key>CFBundleExecutable</key>                   <string>gerbview</string>
+     <key>CFBundleGetInfoString</key>                <string></string>
+     <key>CFBundleIconFile</key>                     <string>gerbview.icns</string>
+-    <key>CFBundleIdentifier</key>                   <string>org.kicad.gerbview</string>
++    <key>CFBundleIdentifier</key>                   <string>com.inductive.gerbview</string>
+     <key>CFBundleInfoDictionaryVersion</key>        <string>6.0</string>
+     <key>CFBundleLongVersionString</key>            <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                         <string>Gerber Viewer</string>
++    <key>CFBundleName</key>                         <string>Inductive Gerber Viewer</string>
+     <key>CFBundlePackageType</key>                  <string>APPL</string>
+     <key>CFBundleShortVersionString</key>           <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>                    <string>????</string>
+diff --git a/resources/macos/plist/kicad.Info.plist.in b/resources/macos/plist/kicad.Info.plist.in
+index eda735632c..3dbaa081f0 100644
+--- a/resources/macos/plist/kicad.Info.plist.in
++++ b/resources/macos/plist/kicad.Info.plist.in
+@@ -25,13 +25,14 @@
+             </dict>
+         </array>
+     <key>CFBundleDevelopmentRegion</key>            <string>English</string>
+-    <key>CFBundleExecutable</key>                   <string>kicad</string>
++    <key>CFBundleDisplayName</key>              <string>Inductive</string>
++    <key>CFBundleExecutable</key>                   <string>Inductive</string>
+     <key>CFBundleGetInfoString</key>                <string></string>
+-    <key>CFBundleIconFile</key>                     <string>kicad.icns</string>
+-    <key>CFBundleIdentifier</key>                   <string>org.kicad.kicad</string>
++    <key>CFBundleIconFile</key>                     <string>inductive.icns</string>
++    <key>CFBundleIdentifier</key>                   <string>com.inductive.kicad</string>
+     <key>CFBundleInfoDictionaryVersion</key>        <string>6.0</string>
+     <key>CFBundleLongVersionString</key>            <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                         <string>KiCad</string>
++    <key>CFBundleName</key>                         <string>Inductive</string>
+     <key>CFBundlePackageType</key>                  <string>APPL</string>
+     <key>CFBundleShortVersionString</key>           <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>                    <string>????</string>
+diff --git a/resources/macos/plist/pcb_calculator.Info.plist.in b/resources/macos/plist/pcb_calculator.Info.plist.in
+index 3802550cc3..c6bb5eb64b 100644
+--- a/resources/macos/plist/pcb_calculator.Info.plist.in
++++ b/resources/macos/plist/pcb_calculator.Info.plist.in
+@@ -6,10 +6,10 @@
+     <key>CFBundleExecutable</key>              <string>pcb_calculator</string>
+     <key>CFBundleGetInfoString</key>           <string></string>
+     <key>CFBundleIconFile</key>                <string>pcb_calculator.icns</string>
+-    <key>CFBundleIdentifier</key>              <string>org.kicad.pcb_calculator</string>
++    <key>CFBundleIdentifier</key>              <string>com.inductive.pcb_calculator</string>
+     <key>CFBundleInfoDictionaryVersion</key>   <string>6.0</string>
+     <key>CFBundleLongVersionString</key>       <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                    <string>PCB Calculator</string>
++    <key>CFBundleName</key>                    <string>Inductive Calculator</string>
+     <key>CFBundlePackageType</key>             <string>APPL</string>
+     <key>CFBundleShortVersionString</key>      <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>               <string>????</string>
+diff --git a/resources/macos/plist/pcbnew.Info.plist.in b/resources/macos/plist/pcbnew.Info.plist.in
+index 0c93415f72..6e36b47bde 100644
+--- a/resources/macos/plist/pcbnew.Info.plist.in
++++ b/resources/macos/plist/pcbnew.Info.plist.in
+@@ -37,13 +37,14 @@
+         </dict>
+     </array>
+ 
+-    <key>CFBundleExecutable</key>               <string>pcbnew</string>
++    <key>CFBundleDisplayName</key>              <string>Inductive PCB</string>
++    <key>CFBundleExecutable</key>               <string>Inductive PCB</string>
+     <key>CFBundleGetInfoString</key>            <string></string>
+-    <key>CFBundleIconFile</key>                 <string>pcbnew.icns</string>
+-    <key>CFBundleIdentifier</key>               <string>org.kicad.pcbnew</string>
++    <key>CFBundleIconFile</key>                 <string>inductive.icns</string>
++    <key>CFBundleIdentifier</key>               <string>com.inductive.pcbnew</string>
+     <key>CFBundleInfoDictionaryVersion</key>    <string>6.0</string>
+     <key>CFBundleLongVersionString</key>        <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                     <string>PCB Editor</string>
++    <key>CFBundleName</key>                     <string>Inductive PCB</string>
+     <key>CFBundlePackageType</key>              <string>APPL</string>
+     <key>CFBundleShortVersionString</key>       <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>                <string>????</string>
+diff --git a/resources/macos/plist/pleditor.Info.plist.in b/resources/macos/plist/pleditor.Info.plist.in
+index bf54c3b9f6..bb16ddb5b7 100644
+--- a/resources/macos/plist/pleditor.Info.plist.in
++++ b/resources/macos/plist/pleditor.Info.plist.in
+@@ -19,10 +19,10 @@
+     <key>CFBundleExecutable</key>                   <string>pl_editor</string>
+     <key>CFBundleGetInfoString</key>                <string></string>
+     <key>CFBundleIconFile</key>                     <string>pagelayout_editor.icns</string>
+-    <key>CFBundleIdentifier</key>                   <string>org.kicad.pl_editor</string>
++    <key>CFBundleIdentifier</key>                   <string>com.inductive.pl_editor</string>
+     <key>CFBundleInfoDictionaryVersion</key>        <string>6.0</string>
+     <key>CFBundleLongVersionString</key>            <string>@KICAD_VERSION_FULL@</string>
+-    <key>CFBundleName</key>                         <string>Drawing Sheet Editor</string>
++    <key>CFBundleName</key>                         <string>Inductive Drawing Sheet Editor</string>
+     <key>CFBundlePackageType</key>                  <string>APPL</string>
+     <key>CFBundleShortVersionString</key>           <string>@KICAD_VERSION@</string>
+     <key>CFBundleSignature</key>                    <string>????</string>

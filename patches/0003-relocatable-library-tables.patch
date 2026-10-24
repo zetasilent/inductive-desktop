@@ -1,0 +1,46 @@
+diff --git a/common/startwizard/startwizard.cpp b/common/startwizard/startwizard.cpp
+index acf3da3a94..8d2dd395d3 100644
+--- a/common/startwizard/startwizard.cpp
++++ b/common/startwizard/startwizard.cpp
+@@ -35,6 +35,8 @@
+ #include <startwizard/startwizard_provider_settings.h>
+ #include <ui_events.h>
+ #include <wx/hyperlink.h>
++#include <wx/ffile.h>
++#include <libraries/library_manager.h>
+ 
+ 
+ class STARTWIZARD_PAGE : public wxWizardPageSimple
+@@ -277,6 +279,32 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
+     m_wizard->Destroy();
+     m_wizard = nullptr;
+ 
++    // Inductive ships its libraries inside the app bundle. A global table that
++    // names the bundle by absolute path breaks every library when the app is
++    // moved, so refer to it through ${KICAD<major>_TEMPLATE_DIR}, which always
++    // resolves to the running bundle's templates.
++    for( LIBRARY_TABLE_TYPE type : { LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_TYPE::FOOTPRINT,
++                                     LIBRARY_TABLE_TYPE::DESIGN_BLOCK } )
++    {
++        const wxString path = LIBRARY_MANAGER::DefaultGlobalTablePath( type );
++        wxString       text;
++        wxFFile        in( path, wxS( "r" ) );
++
++        if( !in.IsOpened() || !in.ReadAll( &text ) )
++            continue;
++
++        in.Close();
++
++        if( text.Replace( wxS( "\"" ) + LIBRARY_MANAGER::StockTablePath( type ) + wxS( "\"" ),
++                          wxS( "\"" ) + LIBRARY_MANAGER::StockTableTokenizedURI( type ) + wxS( "\"" ) ) )
++        {
++            wxFFile out( path, wxS( "w" ) );
++
++            if( out.IsOpened() )
++                out.Write( text );
++        }
++    }
++
+     // Settings import can switch the language after the parent frame was already built in the
+     // system locale, so retranslate it to avoid requiring a restart.
+     if( Pgm().GetSelectedLanguageIdentifier() != languageBefore && aParent )

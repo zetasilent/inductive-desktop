@@ -1,0 +1,118 @@
+{
+  "components": [
+    {
+      "reference": "J1",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "12V input",
+      "x": 40.64,
+      "y": 50.8,
+      "footprint": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"
+    },
+    {
+      "reference": "J2",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "Motor <= 1A stall",
+      "x": 198.12,
+      "y": 50.8,
+      "footprint": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"
+    },
+    {
+      "reference": "J3",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "5V logic PWM input",
+      "x": 40.64,
+      "y": 91.44
+    },
+    {
+      "reference": "Q1",
+      "lib_id": "Transistor_FET:IRLZ44N",
+      "value": "IRLZ44N",
+      "x": 157.48,
+      "y": 76.2
+    },
+    {
+      "reference": "R1",
+      "lib_id": "Device:R",
+      "value": "100",
+      "x": 81.28,
+      "y": 91.44
+    },
+    {
+      "reference": "R2",
+      "lib_id": "Device:R",
+      "value": "100k",
+      "x": 116.84,
+      "y": 116.84
+    },
+    {
+      "reference": "D1",
+      "lib_id": "Diode:1N5822",
+      "value": "1N5822 flyback",
+      "x": 157.48,
+      "y": 40.64
+    },
+    {
+      "reference": "C1",
+      "lib_id": "Device:C_Polarized",
+      "value": "220uF 25V",
+      "x": 81.28,
+      "y": 50.8,
+      "footprint": "Capacitor_THT:CP_Radial_D10.0mm_P5.00mm"
+    },
+    {
+      "reference": "C2",
+      "lib_id": "Device:C",
+      "value": "100nF 25V",
+      "x": 116.84,
+      "y": 50.8
+    }
+  ],
+  "nets": [
+    {
+      "name": "VMOTOR",
+      "pins": [
+        "J1.1",
+        "J2.1",
+        "D1.1",
+        "C1.1",
+        "C2.1"
+      ],
+      "externally_powered": true
+    },
+    {
+      "name": "GND",
+      "pins": [
+        "J1.2",
+        "J3.2",
+        "Q1.3",
+        "R2.2",
+        "C1.2",
+        "C2.2"
+      ],
+      "externally_powered": true
+    },
+    {
+      "name": "MOTOR_LOW",
+      "pins": [
+        "J2.2",
+        "D1.2",
+        "Q1.2"
+      ]
+    },
+    {
+      "name": "PWM",
+      "pins": [
+        "J3.1",
+        "R1.1"
+      ]
+    },
+    {
+      "name": "GATE",
+      "pins": [
+        "R1.2",
+        "R2.1",
+        "Q1.1"
+      ]
+    }
+  ]
+}

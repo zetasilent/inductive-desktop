@@ -1,0 +1,108 @@
+{
+  "components": [
+    {
+      "reference": "J1",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "12V input",
+      "x": 40.64,
+      "y": 50.8,
+      "footprint": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"
+    },
+    {
+      "reference": "C1",
+      "lib_id": "Device:C_Polarized",
+      "value": "220uF 25V low ESR",
+      "x": 76.2,
+      "y": 50.8,
+      "footprint": "Capacitor_THT:CP_Radial_D10.0mm_P5.00mm"
+    },
+    {
+      "reference": "C2",
+      "lib_id": "Device:C",
+      "value": "100nF 25V",
+      "x": 76.2,
+      "y": 86.36
+    },
+    {
+      "reference": "U1",
+      "lib_id": "Regulator_Switching:LM2596T-5",
+      "value": "LM2596T-5",
+      "x": 116.84,
+      "y": 50.8
+    },
+    {
+      "reference": "D1",
+      "lib_id": "Diode:1N5822",
+      "value": "1N5822",
+      "x": 116.84,
+      "y": 86.36
+    },
+    {
+      "reference": "L1",
+      "lib_id": "Device:L",
+      "value": "68uH Isat >= 4.5A",
+      "x": 157.48,
+      "y": 50.8,
+      "footprint": "Inductor_THT:L_Radial_D12.0mm_P5.00mm_Fastron_11P"
+    },
+    {
+      "reference": "C3",
+      "lib_id": "Device:C_Polarized",
+      "value": "220uF 16V low ESR",
+      "x": 198.12,
+      "y": 50.8,
+      "footprint": "Capacitor_THT:CP_Radial_D10.0mm_P5.00mm"
+    },
+    {
+      "reference": "J2",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "5V output",
+      "x": 238.76,
+      "y": 50.8,
+      "footprint": "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal"
+    }
+  ],
+  "nets": [
+    {
+      "name": "VIN",
+      "pins": [
+        "J1.1",
+        "C1.1",
+        "C2.1",
+        "U1.1"
+      ],
+      "externally_powered": true
+    },
+    {
+      "name": "GND",
+      "pins": [
+        "J1.2",
+        "C1.2",
+        "C2.2",
+        "U1.3",
+        "U1.5",
+        "D1.2",
+        "C3.2",
+        "J2.2"
+      ],
+      "externally_powered": true
+    },
+    {
+      "name": "SW",
+      "pins": [
+        "U1.2",
+        "D1.1",
+        "L1.1"
+      ]
+    },
+    {
+      "name": "VOUT",
+      "pins": [
+        "L1.2",
+        "C3.1",
+        "U1.4",
+        "J2.1"
+      ]
+    }
+  ]
+}

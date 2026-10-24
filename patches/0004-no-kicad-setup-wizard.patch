@@ -1,0 +1,110 @@
+diff --git a/common/startwizard/startwizard.cpp b/common/startwizard/startwizard.cpp
+index 8d2dd395d3..f1ce1bf928 100644
+--- a/common/startwizard/startwizard.cpp
++++ b/common/startwizard/startwizard.cpp
+@@ -37,6 +37,8 @@
+ #include <wx/hyperlink.h>
+ #include <wx/ffile.h>
+ #include <libraries/library_manager.h>
++#include <settings/kicad_settings.h>
++#include <settings/settings_manager.h>
+ 
+ 
+ class STARTWIZARD_PAGE : public wxWizardPageSimple
+@@ -159,6 +161,36 @@ STARTWIZARD_PROVIDER* STARTWIZARD::GetProvider( const wxString& aName )
+ }
+ 
+ 
++// Inductive ships its libraries inside the app bundle. A global table that
++// names the bundle by absolute path breaks every library when the app is
++// moved, so refer to it through ${KICAD<major>_TEMPLATE_DIR}, which always
++// resolves to the running bundle's templates.
++static void relocateGlobalTables()
++{
++    for( LIBRARY_TABLE_TYPE type : { LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_TYPE::FOOTPRINT,
++                                     LIBRARY_TABLE_TYPE::DESIGN_BLOCK } )
++    {
++        const wxString path = LIBRARY_MANAGER::DefaultGlobalTablePath( type );
++        wxString       text;
++        wxFFile        in( path, wxS( "r" ) );
++
++        if( !in.IsOpened() || !in.ReadAll( &text ) )
++            continue;
++
++        in.Close();
++
++        if( text.Replace( wxS( "\"" ) + LIBRARY_MANAGER::StockTablePath( type ) + wxS( "\"" ),
++                          wxS( "\"" ) + LIBRARY_MANAGER::StockTableTokenizedURI( type ) + wxS( "\"" ) ) )
++        {
++            wxFFile out( path, wxS( "w" ) );
++
++            if( out.IsOpened() )
++                out.Write( text );
++        }
++    }
++}
++
++
+ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
+ {
+     m_providers.clear();
+@@ -180,6 +212,26 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
+     if( !wizardRequired )
+         return;
+ 
++    // Inductive shows no KiCad setup wizard: its first-run step is its own sign-in.
++    // These are the defaults the wizard's Cancel applies -- fresh settings and the
++    // bundled libraries, no crash reports -- with KiCad's update and plugin-update
++    // checks off, since Inductive ships its own releases.
++    for( std::unique_ptr<STARTWIZARD_PROVIDER>& provider : m_providers )
++    {
++        if( provider->NeedsUserInput() )
++            provider->ApplyDefaults();
++    }
++
++    if( KICAD_SETTINGS* settings = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
++    {
++        settings->m_KiCadUpdateCheck = false;
++        settings->m_PcmUpdateCheck = false;
++        Pgm().GetSettingsManager().Save( settings );
++    }
++
++    relocateGlobalTables();
++    return;
++
+     Pgm().HideSplash();
+ 
+     // wxLogGui shows queued messages when a modal opens
+@@ -279,31 +331,7 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
+     m_wizard->Destroy();
+     m_wizard = nullptr;
+ 
+-    // Inductive ships its libraries inside the app bundle. A global table that
+-    // names the bundle by absolute path breaks every library when the app is
+-    // moved, so refer to it through ${KICAD<major>_TEMPLATE_DIR}, which always
+-    // resolves to the running bundle's templates.
+-    for( LIBRARY_TABLE_TYPE type : { LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_TYPE::FOOTPRINT,
+-                                     LIBRARY_TABLE_TYPE::DESIGN_BLOCK } )
+-    {
+-        const wxString path = LIBRARY_MANAGER::DefaultGlobalTablePath( type );
+-        wxString       text;
+-        wxFFile        in( path, wxS( "r" ) );
+-
+-        if( !in.IsOpened() || !in.ReadAll( &text ) )
+-            continue;
+-
+-        in.Close();
+-
+-        if( text.Replace( wxS( "\"" ) + LIBRARY_MANAGER::StockTablePath( type ) + wxS( "\"" ),
+-                          wxS( "\"" ) + LIBRARY_MANAGER::StockTableTokenizedURI( type ) + wxS( "\"" ) ) )
+-        {
+-            wxFFile out( path, wxS( "w" ) );
+-
+-            if( out.IsOpened() )
+-                out.Write( text );
+-        }
+-    }
++    relocateGlobalTables();
+ 
+     // Settings import can switch the language after the parent frame was already built in the
+     // system locale, so retranslate it to avoid requiring a restart.

@@ -1,0 +1,65 @@
+diff --git a/common/tool/actions.cpp b/common/tool/actions.cpp
+index 6f134281ea..8f6ba405ee 100644
+--- a/common/tool/actions.cpp
++++ b/common/tool/actions.cpp
+@@ -1401,7 +1401,7 @@ TOOL_ACTION ACTIONS::help( TOOL_ACTION_ARGS()
+ TOOL_ACTION ACTIONS::about( TOOL_ACTION_ARGS()
+         .Name( "common.SuiteControl.about" )
+         .Scope( AS_GLOBAL )
+-        .FriendlyName( _( "About KiCad" ) )
++        .FriendlyName( _( "About Inductive" ) )
+         .UIId( wxID_ABOUT )
+         .Icon( BITMAPS::about ) );
+ 
+diff --git a/eeschema/sch_edit_frame.cpp b/eeschema/sch_edit_frame.cpp
+index 390c12dbc9..abe4bd3aae 100644
+--- a/eeschema/sch_edit_frame.cpp
++++ b/eeschema/sch_edit_frame.cpp
+@@ -187,7 +187,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+     m_showBorderAndTitleBlock = true;   // true to show sheet references
+     m_supportsAutoSave = true;
+     m_syncingPcbToSchSelection = false;
+-    m_aboutTitle = _HKI( "KiCad Schematic Editor" );
++    m_aboutTitle = _HKI( "Inductive Schematic" );
+     m_show_search = false;
+     // Ensure timer has an owner before binding so it generates events.
+     m_crossProbeFlashTimer.SetOwner( this );
+diff --git a/kicad/kicad.cpp b/kicad/kicad.cpp
+index 7a1a5baa3d..ea10acd812 100644
+--- a/kicad/kicad.cpp
++++ b/kicad/kicad.cpp
+@@ -94,7 +94,7 @@ PGM_KICAD& PgmTop()
+ 
+ bool PGM_KICAD::OnPgmInit()
+ {
+-    App().SetAppDisplayName( wxT( "KiCad" ) );
++    App().SetAppDisplayName( wxT( "Inductive" ) );
+ 
+ #if defined(DEBUG)
+     wxString absoluteArgv0 = wxStandardPaths::Get().GetExecutablePath();
+diff --git a/kicad/kicad_manager_frame.cpp b/kicad/kicad_manager_frame.cpp
+index aa198410cc..08b17eb251 100644
+--- a/kicad/kicad_manager_frame.cpp
++++ b/kicad/kicad_manager_frame.cpp
+@@ -159,7 +159,7 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
+     const int defaultLeftWinWidth = FromDIP( 250 );
+ 
+     m_leftWinWidth = defaultLeftWinWidth; // Default value
+-    m_aboutTitle = "KiCad";
++    m_aboutTitle = "Inductive";
+ 
+     // JPC: A very ugly hack to fix an issue on Linux: if the wxbase315u_xml_gcc_custom.so is
+     // used **only** in PCM, it is not found in some cases at run time.
+diff --git a/pcbnew/pcb_edit_frame.cpp b/pcbnew/pcb_edit_frame.cpp
+index 0d0db5cdce..ee1e8b4019 100644
+--- a/pcbnew/pcb_edit_frame.cpp
++++ b/pcbnew/pcb_edit_frame.cpp
+@@ -241,7 +241,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
+     // assume dirty
+     m_ZoneFillsDirty = true;
+ 
+-    m_aboutTitle = _HKI( "KiCad PCB Editor" );
++    m_aboutTitle = _HKI( "Inductive PCB" );
+ 
+     // Must be created before the menus are created.
+     if( ADVANCED_CFG::GetCfg().m_ShowPcbnewExportNetlist )

@@ -1,0 +1,50 @@
+{
+  "components": [
+    {
+      "reference": "J1",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "5V input",
+      "x": 45.72,
+      "y": 50.8
+    },
+    {
+      "reference": "R1",
+      "lib_id": "Device:R",
+      "value": "1k",
+      "x": 81.28,
+      "y": 50.8
+    },
+    {
+      "reference": "D1",
+      "lib_id": "Device:LED",
+      "value": "Red LED",
+      "x": 116.84,
+      "y": 50.8
+    }
+  ],
+  "nets": [
+    {
+      "name": "VIN",
+      "pins": [
+        "J1.1",
+        "R1.1"
+      ],
+      "externally_powered": true
+    },
+    {
+      "name": "LED_A",
+      "pins": [
+        "R1.2",
+        "D1.2"
+      ]
+    },
+    {
+      "name": "GND",
+      "pins": [
+        "J1.2",
+        "D1.1"
+      ],
+      "externally_powered": true
+    }
+  ]
+}

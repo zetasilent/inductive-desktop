@@ -1,0 +1,149 @@
+diff --git a/common/project/project_file.cpp b/common/project/project_file.cpp
+index 5af9a26482..7f930d14f6 100644
+--- a/common/project/project_file.cpp
++++ b/common/project/project_file.cpp
+@@ -31,6 +31,7 @@
+ #include <wildcards_and_files_ext.h>
+ #include <project/project_file.h>
+ #include <wx/config.h>
++#include <fstream>
+ #include <wx/filename.h>
+ #include <wx/log.h>
+ 
+@@ -689,6 +690,88 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
+ }
+ 
+ 
++void PROJECT_FILE::snapshotBaseline()
++{
++    try
++    {
++        flushToStore();
++        m_baseline = formatFileContents();
++    }
++    catch( ... )
++    {
++        m_baseline.clear();
++    }
++}
++
++
++void PROJECT_FILE::adoptExternalChanges( const wxString& aDirectory )
++{
++    if( m_baseline.empty() || m_filename.IsEmpty() )
++        return;
++
++    wxFileName path;
++
++    if( aDirectory.empty() )
++        path.Assign( m_filename );
++    else
++        path.Assign( aDirectory, m_filename, getFileExt() );
++
++    path.SetExt( getFileExt() );
++
++    if( !path.FileExists() )
++        return;
++
++    nlohmann::json disk, base, mine;
++
++    try
++    {
++        std::ifstream in( path.GetFullPath().fn_str() );
++        disk = nlohmann::json::parse( in, nullptr, true, true );
++        base = nlohmann::json::parse( m_baseline );
++        mine = nlohmann::json::parse( formatFileContents() );
++    }
++    catch( ... )
++    {
++        return;
++    }
++
++    if( !disk.is_object() || !base.is_object() || !mine.is_object() )
++        return;
++
++    bool adopted = false;
++
++    for( auto it = disk.begin(); it != disk.end(); ++it )
++    {
++        const std::string& key = it.key();
++
++        if( key == "meta" )
++            continue;
++
++        const bool unchangedHere = base.contains( key ) ? mine.contains( key ) && mine[key] == base[key]
++                                                        : !mine.contains( key );
++        const bool changedThere = !base.contains( key ) || base[key] != it.value();
++
++        if( unchangedHere && changedThere )
++        {
++            ( *m_internals )[key] = it.value();
++            adopted = true;
++            wxLogTrace( traceSettings, wxT( "PROJECT_FILE: keeping section '%s' another editor saved" ),
++                        wxString::FromUTF8( key ) );
++        }
++    }
++
++    if( !adopted )
++        return;
++
++    // This process's own values were flushed above, so reloading every parameter picks up
++    // the adopted sections and leaves the rest as they were.
++    Load();
++
++    for( NESTED_SETTINGS* nested : m_nested_settings )
++        nested->LoadFromFile();
++}
++
++
+ bool PROJECT_FILE::LoadFromFile( const wxString& aDirectory )
+ {
+     bool success = JSON_SETTINGS::LoadFromFile( aDirectory );
+@@ -751,6 +834,9 @@ bool PROJECT_FILE::LoadFromFile( const wxString& aDirectory )
+         }
+     }
+ 
++    if( success )
++        snapshotBaseline();
++
+     return success;
+ }
+ 
+@@ -768,7 +854,14 @@ bool PROJECT_FILE::SaveToFile( const wxString& aDirectory, bool aForce )
+     // save should be cleared at this.
+     m_wasMigrated = false;
+ 
+-    return JSON_SETTINGS::SaveToFile( aDirectory, force );
++    // Flush first, so that what this process changed is known before another editor's
++    // sections are taken from disk; the base class then sees nothing new to flush, so tell it.
++    m_modified |= flushToStore();
++    adoptExternalChanges( aDirectory );
++
++    const bool saved = JSON_SETTINGS::SaveToFile( aDirectory, force || m_modified );
++    snapshotBaseline();
++    return saved;
+ }
+ 
+ 
+diff --git a/include/project/project_file.h b/include/project/project_file.h
+index 3865c89de2..c640e3e4dd 100644
+--- a/include/project/project_file.h
++++ b/include/project/project_file.h
+@@ -283,6 +283,17 @@ private:
+     PROJECT* m_project;
+ 
+     bool m_wasMigrated;
++
++    /**
++     * Inductive: the schematic and PCB editors run as separate processes, each with its own
++     * copy of this file; the last to save erased what the other had changed (a board's net
++     * classes and design rules gone after a schematic save). The file as this process last
++     * loaded or saved it; a save keeps the disk's version of every top-level section this
++     * process has not changed since.
++     */
++    std::string m_baseline;
++    void        snapshotBaseline();
++    void        adoptExternalChanges( const wxString& aDirectory );
+ };
+ 
+ // Specializations to allow directly reading/writing FILE_INFO_PAIRs from JSON

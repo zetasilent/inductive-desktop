@@ -1,0 +1,66 @@
+diff --git a/cmake/InstallSteps/RefixupMacOS.cmake b/cmake/InstallSteps/RefixupMacOS.cmake
+index 1180bd581a..904ec4f12e 100644
+--- a/cmake/InstallSteps/RefixupMacOS.cmake
++++ b/cmake/InstallSteps/RefixupMacOS.cmake
+@@ -24,6 +24,30 @@ function( refix_kicad_bundle target )
+         refix_prereqs( ${item} )
+     endforeach( )
+ 
++    # Inductive: KiCad's Python modules (_pcbnew.so) load KiCad's libraries through
++    # @rpath, which their own rpaths resolve against the executable -- right inside the
++    # editors, wrong for the bundled python3 running a script (KiKit, say). One rpath
++    # relative to the module itself serves both.
++    file( GLOB_RECURSE python_modules ${target}/Contents/Frameworks/Python.framework/*.so )
++    list( FILTER python_modules INCLUDE REGEX "/site-packages/[^/]+\\.so$" )
++    foreach( module ${python_modules} )
++        execute_process( COMMAND otool -L ${module} OUTPUT_VARIABLE module_deps )
++        if( module_deps MATCHES "@rpath/" )
++            get_filename_component( module_dir ${module} DIRECTORY )
++            file( RELATIVE_PATH to_frameworks ${module_dir} ${target}/Contents/Frameworks )
++            string( REGEX REPLACE "/+$" "" to_frameworks "${to_frameworks}" )
++            execute_process( COMMAND otool -l ${module} OUTPUT_VARIABLE module_loads )
++            if( NOT module_loads MATCHES "@loader_path/${to_frameworks} " )
++                message( "Adding @loader_path/${to_frameworks} to '${module}'" )
++                execute_process( COMMAND install_name_tool -add_rpath "@loader_path/${to_frameworks}" ${module}
++                                 RESULT_VARIABLE module_rv ERROR_VARIABLE module_err )
++                if( NOT module_rv STREQUAL "0" )
++                    message( FATAL_ERROR "adding rpath to ${module} failed: ${module_err}" )
++                endif()
++            endif()
++        endif()
++    endforeach()
++
+     # For binaries, we need to fix the prereqs and the rpaths
+     file( GLOB subdirs ${target}/Contents/Applications/*.app )
+     foreach( subdir ${subdirs} )
+@@ -129,6 +153,15 @@ function( delete_all_rpaths BINARY_PATH )
+ endfunction()
+ 
+ function( refix_rpaths binary )
++    # Inductive: a binary that loads nothing through @rpath needs no rpaths. The bundled
++    # Python's binaries find their library @loader_path-relative, and python.org's
++    # Python.app launcher has no header room for two more load commands.
++    execute_process( COMMAND otool -L ${binary} OUTPUT_VARIABLE rpath_deps )
++    if( NOT rpath_deps MATCHES "@rpath/" )
++        message( "    loads nothing through @rpath; no rpaths added" )
++        return()
++    endif()
++
+     get_filename_component( executable_path ${binary} DIRECTORY )
+ 
+     set( desired_rpaths )
+@@ -206,6 +239,14 @@ function( refix_prereqs target )
+                 continue()
+             endif()
+ 
++            # Inductive: already relative to the binary (the bundled Python's own
++            # libraries, tools/relocate-python-framework.py) is already relocatable;
++            # turning it into @rpath/<name> breaks a module that has no rpaths.
++            if( raw_prereq MATCHES "^@(loader|executable)_path.*" )
++                message( DEBUG "    already relative; skipping" )
++                continue()
++            endif()
++
+             get_filename_component( prereq_name ${raw_prereq} NAME )
+             message( DEBUG "    prereq name: ${prereq_name}" )
+             set( changed_prereq "" )
