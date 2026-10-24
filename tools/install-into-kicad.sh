@@ -132,8 +132,12 @@ else
   git -C "$KICAD" apply "$REPO/patches/0010-project-file-keeps-other-editors-changes.patch"
 fi
 
-echo "installing node deps..."
-( cd "$REPO" && npm ci --ignore-scripts --no-fund --no-audit )
+# The repo's Node tooling (tests, release scripts). The app itself needs none of it, so a
+# checkout without it (the public source, a server build) skips this.
+if [ -f "$REPO/package.json" ] && command -v npm > /dev/null; then
+  echo "installing node deps..."
+  ( cd "$REPO" && npm ci --ignore-scripts --no-fund --no-audit )
+fi
 
 # Inductive's settings directory (inductive/10.0) starts empty, so the library choosers would be empty
 # too and no part could be placed.  Reported rather than done: it edits the user's
