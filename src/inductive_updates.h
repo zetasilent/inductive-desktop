@@ -36,6 +36,9 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -44,6 +47,9 @@
 
 #ifdef __WXMAC__
 #include <CommonCrypto/CommonDigest.h>
+#endif
+
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
