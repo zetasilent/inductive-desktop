@@ -519,11 +519,16 @@ class EVERY_APP_LOCK
 public:
     EVERY_APP_LOCK()
     {
+#ifdef __WXMAC__
         char dir[PATH_MAX] = {};
         const size_t got = confstr( _CS_DARWIN_USER_TEMP_DIR, dir, sizeof( dir ) );
 
         if( got == 0 || got > sizeof( dir ) )
             return;   // no private folder: refresh unlocked, as before
+#else
+        const char dir[] = "";
+        return;       // the Keychain is shared only on macOS
+#endif
 
         const std::string path = std::string( dir ) + "com.inductive.desktop.session.lock";
         m_fd = open( path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600 );
