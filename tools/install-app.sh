@@ -168,6 +168,18 @@ then
   done
   echo "version: $VERSION"
 
+  # A build for an older macOS says so, and an even older Mac then explains instead of
+  # failing to start (CMAKE_OSX_DEPLOYMENT_TARGET, set by INDUCTIVE_MACOS_MIN).
+  MIN_MACOS="$(sed -nE 's/^CMAKE_OSX_DEPLOYMENT_TARGET:STRING=(.+)$/\1/p' "$BUILD/CMakeCache.txt")"
+  if [ -n "$MIN_MACOS" ]; then
+    for plist in "$DEST/Inductive.app/Contents/Info.plist" "$DEST"/Inductive.app/Contents/Applications/*.app/Contents/Info.plist; do
+      [ -f "$plist" ] || continue
+      /usr/libexec/PlistBuddy -c "Delete :LSMinimumSystemVersion" "$plist" 2> /dev/null || true
+      /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $MIN_MACOS" "$plist"
+    done
+    echo "minimum macOS: $MIN_MACOS"
+  fi
+
   # A downloaded app has no ~/.config/inductive/env, so it needs the server address
   # and sign-in settings in the bundle. Only these four public keys are copied --
   # never anything else in the file. Must happen before signing seals the bundle.

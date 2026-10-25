@@ -29,7 +29,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$(cd "$REPO/.." && pwd)/kicad-mac-builder/build/kicad-dest/Inductive.app"
+# The app to package: this Mac's build, or INDUCTIVE_APP (tools/adopt-macos-build.sh's).
+APP="${INDUCTIVE_APP:-$(cd "$REPO/.." && pwd)/kicad-mac-builder/build/kicad-dest/Inductive.app}"
 # The release number, with the commit added unless this is the tagged release.
 VERSION="$(sed -nE 's/^#define INDUCTIVE_VERSION "([^"]+)".*/\1/p' "$REPO/src/inductive_version.h")"
 if ! git -C "$REPO" describe --exact-match --tags "v$VERSION" >/dev/null 2>&1 || [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then

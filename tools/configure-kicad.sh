@@ -13,6 +13,10 @@
 # comes from Homebrew (brew install swig). Settings live in
 # ~/Library/Preferences/inductive/10.0 (KICAD_CONFIG_DIR), apart from a stock
 # KiCad 10's kicad/10.0. QA tests are built: tools/test-*.py link against them.
+#
+# INDUCTIVE_MACOS_MIN=14.0 builds for that macOS and later (the default is this Mac's
+# version); the libraries must have been built for it too (tools/build-macos.sh).
+# INDUCTIVE_QA_TESTS=OFF skips the QA programs, as a release build does.
 set -euo pipefail
 
 KICAD="${1:?usage: configure-kicad.sh /path/to/kicad /path/to/kicad-mac-builder}"
@@ -59,7 +63,8 @@ cmake -S "$KICAD" -B "$KICAD/build/release" -G "Unix Makefiles" \
   -DKICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE=ON \
   -DKICAD_OSX_SIGNING_ID=- \
   -DKICAD_UPDATE_CHECK=OFF \
-  -DKICAD_BUILD_QA_TESTS=ON \
+  -DKICAD_BUILD_QA_TESTS="${INDUCTIVE_QA_TESTS:-ON}" \
+  ${INDUCTIVE_MACOS_MIN:+-DCMAKE_OSX_DEPLOYMENT_TARGET="$INDUCTIVE_MACOS_MIN"} \
   -DKICAD_CONFIG_DIR=inductive \
   -DKICAD_SCRIPTING_WXPYTHON=OFF \
   -DPYTHON_EXECUTABLE="$PYFW/Versions/Current/bin/python3" \
