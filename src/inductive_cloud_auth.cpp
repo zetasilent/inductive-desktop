@@ -27,14 +27,26 @@
 #include <thread>
 #include <vector>
 
-#include <arpa/inet.h>
 #include <cerrno>
 #include <climits>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <wincred.h>
+#include <bcrypt.h>
+#pragma comment( lib, "ws2_32.lib" )
+#pragma comment( lib, "advapi32.lib" )
+#pragma comment( lib, "bcrypt.lib" )
+#else
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #ifdef __WXMAC__
 #include <Security/Security.h>
@@ -98,10 +110,13 @@ static wxString bundledEnvFile()
 
     for( int level = 0; level < 7 && !dir.empty(); ++level, dir = dir.parent_path() )
     {
-        const auto candidate = dir / "SharedSupport" / "inductive" / "cloud.env";
-
-        if( std::filesystem::exists( candidate ) )
-            return wxString::FromUTF8( candidate.string() );
+        // macOS bundles keep it in SharedSupport; Windows installs keep it in share\kicad.
+        for( const auto& candidate : { dir / "SharedSupport" / "inductive" / "cloud.env",
+                                       dir / "share" / "kicad" / "inductive" / "cloud.env" } )
+        {
+            if( std::filesystem::exists( candidate ) )
+                return wxString::FromUTF8( candidate.string() );
+        }
     }
 
     return wxEmptyString;
@@ -339,6 +354,52 @@ static bool storeAdd( const char* aItem, const std::string& aSecret )
     return st == errSecSuccess;
 }
 
+#elif defined( _WIN32 )
+
+/// Windows Credential Manager, per user and kept on this machine only (never roamed).
+static std::wstring credentialTarget( const char* aItem )
+{
+    return L"Inductive/" + wxString::FromUTF8( aItem ).ToStdWstring();
+}
+
+
+static std::string storeRead( const char* aItem )
+{
+    PCREDENTIALW cred = nullptr;
+
+    if( !CredReadW( credentialTarget( aItem ).c_str(), CRED_TYPE_GENERIC, 0, &cred ) )
+        return {};
+
+    std::string out( reinterpret_cast<const char*>( cred->CredentialBlob ), cred->CredentialBlobSize );
+    CredFree( cred );
+    return out;
+}
+
+
+static bool storeWrite( const char* aItem, const std::string& aSecret )
+{
+    if( aSecret.size() > CRED_MAX_CREDENTIAL_BLOB_SIZE )
+        return false;
+
+    std::wstring   target = credentialTarget( aItem );
+    std::wstring   user = L"Inductive";
+    CREDENTIALW    cred{};
+    cred.Type = CRED_TYPE_GENERIC;
+    cred.TargetName = target.data();
+    cred.UserName = user.data();
+    cred.CredentialBlobSize = static_cast<DWORD>( aSecret.size() );
+    cred.CredentialBlob = reinterpret_cast<LPBYTE>( const_cast<char*>( aSecret.data() ) );
+    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+
+    return CredWriteW( &cred, 0 ) && storeRead( aItem ) == aSecret;
+}
+
+
+static void storeDelete( const char* aItem )
+{
+    CredDeleteW( credentialTarget( aItem ).c_str(), CRED_TYPE_GENERIC, 0 );
+}
+
 #else
 
 /// ~/.config/inductive/<item>, readable by this user only.
@@ -440,6 +501,55 @@ static std::string base64Url( const unsigned char* aData, size_t aLen )
 }
 
 
+// ── the loopback socket the browser comes back to ────────────────────────────────
+
+#ifdef _WIN32
+using LOOPBACK_SOCKET = SOCKET;
+static const LOOPBACK_SOCKET NO_SOCKET = INVALID_SOCKET;
+static void closeSocket( LOOPBACK_SOCKET aSocket ) { closesocket( aSocket ); }
+#else
+using LOOPBACK_SOCKET = int;
+static const LOOPBACK_SOCKET NO_SOCKET = -1;
+static void closeSocket( LOOPBACK_SOCKET aSocket ) { ::close( aSocket ); }
+#endif
+
+
+/// The next browser connection, or NO_SOCKET once aSeconds pass without one.
+static LOOPBACK_SOCKET acceptWithin( LOOPBACK_SOCKET aListener, long aSeconds )
+{
+#ifdef _WIN32
+    // Windows ignores a receive timeout on accept(); wait for the connection instead.
+    fd_set ready;
+    FD_ZERO( &ready );
+    FD_SET( aListener, &ready );
+    timeval tv{ aSeconds, 0 };
+
+    if( select( 0, &ready, nullptr, nullptr, &tv ) <= 0 )
+        return NO_SOCKET;
+
+    const LOOPBACK_SOCKET client = accept( aListener, nullptr, nullptr );
+
+    if( client != NO_SOCKET )
+    {
+        // A connection that never sends (a browser probe) must not hold sign-in open.
+        const DWORD ms = 10000;
+        setsockopt( client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>( &ms ), sizeof( ms ) );
+    }
+
+    return client;
+#else
+    struct timeval tv
+    {
+        aSeconds, 0
+    };
+    setsockopt( aListener, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
+
+    const int client = accept( aListener, nullptr, nullptr );
+    return client < 0 ? NO_SOCKET : client;
+#endif
+}
+
+
 /// 256 bits from the OS's CSPRNG, base64url; empty if it could not be had.
 static std::string randomSecret()
 {
@@ -447,6 +557,9 @@ static std::string randomSecret()
 
 #ifdef __WXMAC__
     if( SecRandomCopyBytes( kSecRandomDefault, sizeof( bytes ), bytes ) != errSecSuccess )
+        return {};
+#elif defined( _WIN32 )
+    if( BCryptGenRandom( nullptr, bytes, sizeof( bytes ), BCRYPT_USE_SYSTEM_PREFERRED_RNG ) != 0 )
         return {};
 #else
     FILE* urandom = fopen( "/dev/urandom", "rb" );
@@ -519,7 +632,18 @@ class EVERY_APP_LOCK
 public:
     EVERY_APP_LOCK()
     {
-#ifdef __WXMAC__
+#if defined( _WIN32 )
+        // Local\ is this user's logon session: the three editors share it, other users do not.
+        m_mutex = CreateMutexW( nullptr, FALSE, L"Local\\com.inductive.desktop.session.lock" );
+
+        if( m_mutex && WaitForSingleObject( m_mutex, INFINITE ) == WAIT_FAILED )
+        {
+            CloseHandle( m_mutex );
+            m_mutex = nullptr;   // refresh unlocked, as on macOS without a private folder
+        }
+
+        return;
+#elif defined( __WXMAC__ )
         char dir[PATH_MAX] = {};
         const size_t got = confstr( _CS_DARWIN_USER_TEMP_DIR, dir, sizeof( dir ) );
 
@@ -527,28 +651,42 @@ public:
             return;   // no private folder: refresh unlocked, as before
 #else
         const char dir[] = "";
-        return;       // the Keychain is shared only on macOS
+        return;       // one app per session elsewhere
 #endif
 
+#ifndef _WIN32
         const std::string path = std::string( dir ) + "com.inductive.desktop.session.lock";
         m_fd = open( path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600 );
 
         while( m_fd >= 0 && flock( m_fd, LOCK_EX ) != 0 && errno == EINTR )
         {
         }
+#endif
     }
 
     ~EVERY_APP_LOCK()
     {
+#ifdef _WIN32
+        if( m_mutex )
+        {
+            ReleaseMutex( m_mutex );
+            CloseHandle( m_mutex );
+        }
+#else
         if( m_fd >= 0 )
             close( m_fd );   // releases the lock
+#endif
     }
 
     EVERY_APP_LOCK( const EVERY_APP_LOCK& ) = delete;
     EVERY_APP_LOCK& operator=( const EVERY_APP_LOCK& ) = delete;
 
 private:
+#ifdef _WIN32
+    HANDLE m_mutex = nullptr;
+#else
     int m_fd = -1;
+#endif
 };
 
 
@@ -1050,16 +1188,36 @@ void BeginBrowserSignIn( const CONFIG& aConfig,
             return;
         }
 
-        const int fd = ::socket( AF_INET, SOCK_STREAM, 0 );
+#ifdef _WIN32
+        WSADATA wsa;
 
-        if( fd < 0 )
+        if( WSAStartup( MAKEWORD( 2, 2 ), &wsa ) != 0 )
+        {
+            aOnDone( wxS( "could not open loopback socket" ), false );
+            return;
+        }
+
+        struct WSA_DONE
+        {
+            ~WSA_DONE() { WSACleanup(); }
+        } wsaDone;
+#endif
+
+        const LOOPBACK_SOCKET fd = ::socket( AF_INET, SOCK_STREAM, 0 );
+
+        if( fd == NO_SOCKET )
         {
             aOnDone( wxS( "could not open loopback socket" ), false );
             return;
         }
 
         int yes = 1;
+#ifdef _WIN32
+        // No other program may bind this port while sign-in waits on it.
+        setsockopt( fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>( &yes ), sizeof( yes ) );
+#else
         setsockopt( fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof( yes ) );
+#endif
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -1069,7 +1227,7 @@ void BeginBrowserSignIn( const CONFIG& aConfig,
         if( bind( fd, reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) != 0
             || listen( fd, 16 ) != 0 )
         {
-            ::close( fd );
+            closeSocket( fd );
             aOnDone( wxS( "could not bind loopback callback port" ), false );
             return;
         }
@@ -1110,25 +1268,18 @@ void BeginBrowserSignIn( const CONFIG& aConfig,
             const auto left = std::chrono::duration_cast<std::chrono::seconds>(
                                       deadline - std::chrono::steady_clock::now() )
                                       .count();
-            struct timeval tv
-            {
-                left > 0 ? (long) left : 1L, 0
-            };
-            setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
+            const LOOPBACK_SOCKET client = acceptWithin( fd, left > 0 ? (long) left : 1L );
 
-            const int client = accept( fd, nullptr, nullptr );
-
-            if( client < 0 )
+            if( client == NO_SOCKET )
                 break;
 
             std::string req;
             {
-                char    chunk[4096];
-                ssize_t n = 0;
+                char chunk[4096];
 
                 while( req.size() < 256 * 1024 )
                 {
-                    n = ::recv( client, chunk, sizeof( chunk ), 0 );
+                    const auto n = ::recv( client, chunk, sizeof( chunk ), 0 );
 
                     if( n <= 0 )
                         break;
@@ -1167,7 +1318,11 @@ void BeginBrowserSignIn( const CONFIG& aConfig,
                 else if( tokens.outcome == TOKEN_RESULT::ISSUED )
                 {
                     revokeOnServer( tokens.refreshToken );
+#ifdef _WIN32
+                    error = wxS( "could not store the sign-in in Windows Credential Manager" );
+#else
                     error = wxS( "could not store the sign-in in the Keychain" );
+#endif
                 }
                 else if( tokens.outcome == TOKEN_RESULT::REFUSED )
                 {
@@ -1185,15 +1340,15 @@ void BeginBrowserSignIn( const CONFIG& aConfig,
                     + "\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store"
                       "\r\nContent-Length: "
                     + std::to_string( body.size() ) + "\r\nConnection: close\r\n\r\n" + body;
-            ::send( client, response.data(), response.size(), 0 );
-            ::close( client );
+            ::send( client, response.data(), static_cast<int>( response.size() ), 0 );
+            closeSocket( client );
 
             // A code is single-use: whatever became of ours, this attempt is over.
             if( ours )
                 break;
         }
 
-        ::close( fd );
+        closeSocket( fd );
         aOnDone( error, !answered );
     } ).detach();
 }

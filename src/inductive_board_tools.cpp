@@ -1513,7 +1513,7 @@ bool ExportJlcpcbFiles( BOARD* aBoard, wxString& aResult )
         {
             LINE l;
             l.value = fp->GetValue();
-            l.footprint = fp->GetFPID().GetLibItemName();
+            l.footprint = fp->GetFPID().GetLibItemName().wx_str();
             l.lcsc = lcsc;
             LINE& line = bom.emplace( l.value + wxS( "\x1f" ) + l.footprint + wxS( "\x1f" ) + lcsc, l ).first->second;
             line.refs.Add( ref );

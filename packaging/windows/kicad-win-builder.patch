@@ -1,0 +1,41 @@
+--- a/build.ps1
++++ b/build.ps1
+@@ -575,7 +575,10 @@
+         "-DCMAKE_MAKE_PROGRAM=$env:NINJA_PATH",
+         '-DKICAD_BUILD_QA_TESTS=OFF',
+         '-DKICAD_BUILD_I18N=ON',
+-        '-DKICAD_WIN32_DPI_AWARE=ON'
++        '-DKICAD_WIN32_DPI_AWARE=ON',
++        # Inductive: its own settings folder (%APPDATA%\inductive), and only its own updates.
++        '-DKICAD_CONFIG_DIR=inductive',
++        '-DKICAD_UPDATE_CHECK=OFF'
+     )
+ 
+     if( $settings.SentryDsn -ne "" ) {
+@@ -616,7 +619,8 @@
+ 
+         & {
+             $ErrorActionPreference = 'SilentlyContinue'
+-            cmake --build $cmakeBuildFolder -j 2>&1 | % ToString
++            # Inductive: keep going past a failed file, so one build reports every error.
++            cmake --build $cmakeBuildFolder -j -- -k 0 2>&1 | % ToString
+         }
+ 
+         if ($LastExitCode -ne 0) {
+@@ -1240,7 +1244,7 @@
+         $env:Path = $originalEnvPath
+ 
+         Build-Library-Source -arch $arch -buildType $buildType -libraryFolderName kicad-footprints
+-        Build-Library-Source -arch $arch -buildType $buildType -libraryFolderName kicad-packages3D
++        # Inductive ships no 3D models.
+         Build-Library-Source -arch $arch -buildType $buildType -libraryFolderName kicad-templates
+ 
+         if( $hostPython3Path )
+@@ -1251,7 +1255,6 @@
+         $env:Path = $originalEnvPath
+ 
+         Install-Library -arch $arch -buildType $buildType -libraryFolderName kicad-footprints
+-        Install-Library -arch $arch -buildType $buildType -libraryFolderName kicad-packages3D
+         Install-Library -arch $arch -buildType $buildType -libraryFolderName kicad-templates
+ 
+         # unset this so we dont find something weird out later

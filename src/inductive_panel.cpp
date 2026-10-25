@@ -522,8 +522,9 @@ wxString INDUCTIVE_PANEL::WebDir()
     // to the configured checkout. Walk enclosing app bundles for editor launches.
     auto parent=std::filesystem::path(wxStandardPaths::Get().GetExecutablePath().ToStdString()).parent_path();
     for(int level=0;level<7 && !parent.empty();++level,parent=parent.parent_path()) {
-        auto candidate=parent/"SharedSupport"/"inductive"/"web";
-        if(std::filesystem::exists(candidate/"sidebar.html"))return wxString::FromUTF8(candidate.string());
+        // macOS bundles keep data in SharedSupport; Windows installs keep it in share\kicad.
+        for(const auto& candidate:{parent/"SharedSupport"/"inductive"/"web",parent/"share"/"kicad"/"inductive"/"web"})
+            if(std::filesystem::exists(candidate/"sidebar.html"))return wxString::FromUTF8(candidate.string());
     }
     return wxString::FromUTF8( INDUCTIVE_WEB_DIR );
 }
@@ -1702,7 +1703,7 @@ void INDUCTIVE_PANEL::runCommand( const wxString& aCommand )
 
     if( !known && usesPipeline() )
     {
-        ask( wxS( "/" ) + aCommand, m_mode.IsEmpty() ? wxS( "Agent" ) : m_mode,
+        ask( wxS( "/" ) + aCommand, m_mode.IsEmpty() ? wxString( wxS( "Agent" ) ) : m_mode,
              nlohmann::json::array() );
         return;
     }
@@ -4905,7 +4906,7 @@ void INDUCTIVE_PANEL::workflowMessage(const nlohmann::json& msg)
         auto parent=std::filesystem::path(wxStandardPaths::Get().GetExecutablePath().ToStdString()).parent_path();
         wxString executable;
         for(int level=0;level<7 && !parent.empty();++level,parent=parent.parent_path()) {
-            for(const auto& candidate:{parent/"Inductive",parent/"Contents"/"MacOS"/"Inductive"})
+            for(const auto& candidate:{parent/"Inductive",parent/"Contents"/"MacOS"/"Inductive",parent/"inductive.exe"})
                 if(std::filesystem::is_regular_file(candidate)){executable=wxString::FromUTF8(candidate.string());break;}
             if(!executable.empty())break;
         }

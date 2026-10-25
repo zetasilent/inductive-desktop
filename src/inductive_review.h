@@ -266,11 +266,11 @@ inline json Run(const json& snapshot,const json& state,const json& sources)
         std::set<std::string> targets; bool conflict=false;
         for(const auto& f:facts) if(f.value("approved",false) && !targets.insert(f.value("kind","")+":"+f.value("pin","")).second) conflict=true;
         if(conflict) {add("evidence","needs_investigation",c,"Conflicting approved specifications","Multiple approved records apply to the same pin and check. Resolve variants or conditions before checking.");continue;}
-        bool any=false, supply=false, interface=false;
+        bool any=false, supply=false, interfacing=false;
         for(const auto& f:facts)
         {
             if(!f.value("approved",false)) continue;
-            any=true; const auto kind=f.value("kind",""); supply|=kind=="supply"; interface|=kind=="input" || kind=="output";
+            any=true; const auto kind=f.value("kind",""); supply|=kind=="supply"; interfacing|=kind=="input" || kind=="output";
             const auto* pin=Pin(c,f.value("pin","")); const auto* ground=Pin(c,f.value("ground_pin",""));
             auto e=json::array({evidence(source,f)});
             if(kind=="connection")
@@ -340,7 +340,7 @@ inline json Run(const json& snapshot,const json& state,const json& sources)
         }
         if(!any) add("evidence","not_checked",c,"No approved specifications","Extract or enter facts and explicitly approve them against the source PDF.");
         if(!supply) add("supply","not_checked",c,"Supply specifications are not covered","No approved supply-pin record applies to this component.");
-        if(!interface) add("interface","not_checked",c,"Interface specifications are not covered","No approved interface-pin record applies to this component.");
+        if(!interfacing) add("interface","not_checked",c,"Interface specifications are not covered","No approved interface-pin record applies to this component.");
     }
     for(const auto& [net,drivers]:outputs) for(const auto& out:drivers) if(out.fact.value("drive","")=="open_drain")
     {

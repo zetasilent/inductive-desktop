@@ -64,6 +64,8 @@ done
 for app in kicad eeschema pcbnew; do
   ln -sfn "$(rel "$REPO/brand/inductive.icns" "$KICAD/$app")" "$KICAD/$app/inductive.icns"
 done
+# Windows: the executables' icon, beside KiCad's (patch 0011 points the .rc files at it)
+ln -sfn "$(rel "$REPO/brand/inductive.ico" "$KICAD/resources/bitmaps_png/icons")" "$KICAD/resources/bitmaps_png/icons/icon_inductive.ico"
 
 echo "applying integration patches..."
 # A completed launch patch changes context in the original pane patch. Check
@@ -130,6 +132,13 @@ if git -C "$KICAD" apply --check --reverse "$REPO/patches/0010-project-file-keep
   echo "  project-file merge already applied"
 else
   git -C "$KICAD" apply "$REPO/patches/0010-project-file-keeps-other-editors-changes.patch"
+fi
+# Windows: inductive.exe, inductive-pcb.exe and inductive-schematic.exe, with Inductive's
+# icon and version text, so an install never collides with KiCad's. Nothing changes on macOS.
+if git -C "$KICAD" apply --check --reverse "$REPO/patches/0011-windows-names-and-icons.patch" 2>/dev/null; then
+  echo "  Windows names already applied"
+else
+  git -C "$KICAD" apply "$REPO/patches/0011-windows-names-and-icons.patch"
 fi
 
 # The repo's Node tooling (tests, release scripts). The app itself needs none of it, so a

@@ -327,7 +327,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
         return false;
     };
     // The other end of a two-pin part.
-    auto far = []( const PART& aPart, const wxString& aNear ) -> wxString
+    auto otherEnd = []( const PART& aPart, const wxString& aNear ) -> wxString
     {
         if( aPart.pins.size() != 2 )
             return wxEmptyString;
@@ -350,7 +350,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
         std::vector<double> farads;
 
         for( const PART* c : twoPins( aNet, wxS( "C" ) ) )
-            if( IsGround( far( *c, aNet ) ) )
+            if( IsGround( otherEnd( *c, aNet ) ) )
                 farads.push_back( Farads( c->value ) );
 
         return farads;
@@ -358,7 +358,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
     auto pulledTo = [&]( const wxString& aNet, const std::function<bool( const wxString& )>& aEnd ) -> const PART*
     {
         for( const PART* r : twoPins( aNet, wxS( "R" ) ) )
-            if( far( *r, aNet ) != aNet && aEnd( far( *r, aNet ) ) )
+            if( otherEnd( *r, aNet ) != aNet && aEnd( otherEnd( *r, aNet ) ) )
                 return r;
 
         return nullptr;
@@ -736,7 +736,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
 
                     for( const wxChar* series : { wxS( "R" ), wxS( "FB" ), wxS( "L" ) } )
                         for( const PART* s : twoPins( net, series ) )
-                            for( const AT& at : icPins( far( *s, net ), &part ) )
+                            for( const AT& at : icPins( otherEnd( *s, net ), &part ) )
                                 reached.push_back( at );
 
                     for( const AT& at : reached )
@@ -778,12 +778,12 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
 
                 for( const PART* r : twoPins( gate->net, wxS( "R" ) ) )
                 {
-                    for( const AT& at : icPins( far( *r, gate->net ), nullptr ) )
+                    for( const AT& at : icPins( otherEnd( *r, gate->net ), nullptr ) )
                     {
                         if( gpio( at ) )
                         {
                             driver = at.part;
-                            sides.insert( far( *r, gate->net ) );
+                            sides.insert( otherEnd( *r, gate->net ) );
                         }
                     }
                 }
@@ -841,11 +841,11 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
 
         for( int side = 0; side < 2; ++side )
         {
-            const wxString near = part.pins[side].net;
+            const wxString here = part.pins[side].net;
             const wxString end = part.pins[1 - side].net;
             std::vector<AT> others;
 
-            for( const AT& at : on( near ) )
+            for( const AT& at : on( here ) )
                 if( at.part != &part )
                     others.push_back( at );
 
@@ -854,7 +854,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
 
             const PART&    r = *others[0].part;
             const double   ohms = Ohms( r.value );
-            const wxString rFar = far( r, near );
+            const wxString rFar = otherEnd( r, here );
 
             if( ohms <= 0 || rFar.IsEmpty() )
                 break;
@@ -942,16 +942,16 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
             if( bare.count( rail ) )
                 continue;
 
-            int small = 0;
+            int tiny = 0;
 
             for( double f : capsToGround( rail ) )
-                small += f > 0 && f <= 1.1e-6;
+                tiny += f > 0 && f <= 1.1e-6;
 
-            if( pins.size() >= 4 && small * 2 < (int) pins.size() )
+            if( pins.size() >= 4 && tiny * 2 < (int) pins.size() )
             {
                 out.push_back( wxString::Format( _( "%s feeds %d IC supply pins with %d small capacitor(s): put 100 nF "
                                                     "beside each supply pin, or at least one per pair." ),
-                                                 Base( rail ), (int) pins.size(), small ) );
+                                                 Base( rail ), (int) pins.size(), tiny ) );
             }
         }
     }
@@ -981,7 +981,7 @@ inline std::vector<wxString> Check( const std::vector<PART>& aParts )
         std::vector<const PART*> ups;
 
         for( const PART* r : twoPins( net, wxS( "R" ) ) )
-            if( supply( far( *r, net ) ) )
+            if( supply( otherEnd( *r, net ) ) )
                 ups.push_back( r );
 
         if( ups.empty() )

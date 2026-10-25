@@ -1,0 +1,143 @@
+diff --git a/common/executable_names.cpp b/common/executable_names.cpp
+index bb3550db..cb41c659 100644
+--- a/common/executable_names.cpp
++++ b/common/executable_names.cpp
+@@ -28,8 +28,8 @@
+ 
+ #ifdef __WINDOWS__
+ const wxString CVPCB_EXE           ( wxS( "cvpcb.exe" ) );
+-const wxString PCBNEW_EXE          ( wxS( "pcbnew.exe" ) );
+-const wxString EESCHEMA_EXE        ( wxS( "eeschema.exe" ) );
++const wxString PCBNEW_EXE          ( wxS( "inductive-pcb.exe" ) );
++const wxString EESCHEMA_EXE        ( wxS( "inductive-schematic.exe" ) );
+ const wxString GERBVIEW_EXE        ( wxS( "gerbview.exe" ) );
+ const wxString BITMAPCONVERTER_EXE ( wxS( "bitmap2component.exe" ) );
+ const wxString PCB_CALCULATOR_EXE  ( wxS( "pcb_calculator.exe" ) );
+diff --git a/eeschema/CMakeLists.txt b/eeschema/CMakeLists.txt
+index 4d50026d..0577b07c 100644
+--- a/eeschema/CMakeLists.txt
++++ b/eeschema/CMakeLists.txt
+@@ -583,6 +583,11 @@ add_executable( eeschema WIN32 MACOSX_BUNDLE
+     ${EESCHEMA_RESOURCES}
+     )
+ 
++if( WIN32 )
++    # Inductive's own name, so an install never collides with KiCad's.
++    set_target_properties( eeschema PROPERTIES OUTPUT_NAME "inductive-schematic" )
++endif()
++
+ set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
+     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_SCH;PGM_DATA_FILE_EXT=\"kicad_sch\";BUILD_KIWAY_DLL"
+     )
+diff --git a/kicad/CMakeLists.txt b/kicad/CMakeLists.txt
+index b98c7965..a9deb714 100644
+--- a/kicad/CMakeLists.txt
++++ b/kicad/CMakeLists.txt
+@@ -127,6 +127,11 @@ add_executable( kicad-cli WIN32
+     ${KICAD_RESOURCES}
+     )
+ 
++if( WIN32 )
++    # Inductive's own name, so an install never collides with KiCad's.
++    set_target_properties( kicad PROPERTIES OUTPUT_NAME "inductive" )
++endif()
++
+ if( MSVC )
+    # The cli needs subsystem:console or else we can't link wmain/main
+    set_target_properties(kicad-cli PROPERTIES COMPILE_DEFINITIONS_DEBUG "_CONSOLE")
+diff --git a/pcbnew/CMakeLists.txt b/pcbnew/CMakeLists.txt
+index bcad7581..0bdd95f4 100644
+--- a/pcbnew/CMakeLists.txt
++++ b/pcbnew/CMakeLists.txt
+@@ -799,6 +799,11 @@ add_executable( pcbnew WIN32 MACOSX_BUNDLE
+     ${PCBNEW_RESOURCES}
+     )
+ 
++if( WIN32 )
++    # Inductive's own name, so an install never collides with KiCad's.
++    set_target_properties( pcbnew PROPERTIES OUTPUT_NAME "inductive-pcb" )
++endif()
++
+ set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
+     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_PCB_EDITOR;PGM_DATA_FILE_EXT=\"kicad_pcb\";BUILD_KIWAY_DLL"
+     )
+diff --git a/resources/msw/eeschema.rc b/resources/msw/eeschema.rc
+index 06a6d5e8..f6e83cd9 100644
+--- a/resources/msw/eeschema.rc
++++ b/resources/msw/eeschema.rc
+@@ -1,11 +1,11 @@
+ #include "resource.h"
+ 
+-IDI_APP_EESCHEMA_ICON ICON "../resources/bitmaps_png/icons/icon_eeschema.ico"
++IDI_APP_EESCHEMA_ICON ICON "../resources/bitmaps_png/icons/icon_inductive.ico"
+ IDI_FILE_SCHEMATIC_ICON ICON "../resources/bitmaps_png/icons/fileicon_schematic.ico"
+ IDI_FILE_SYMBOL_ICON ICON "../resources/bitmaps_png/icons/fileicon_symbol.ico"
+ 
+-#define RC_VER_FILE_DESCRIPTION "KiCad Schematic Editor " KICAD_WIN32_RC_PRODVER_STR
+-#define RC_VER_INTERNALNAME "eeschema"
+-#define RC_VER_ORIGINALFILENAME "eeschema.exe"
++#define RC_VER_FILE_DESCRIPTION "Inductive Schematic"
++#define RC_VER_INTERNALNAME "inductive-schematic"
++#define RC_VER_ORIGINALFILENAME "inductive-schematic.exe"
+ 
+ #include "kiwin32.rc"
+diff --git a/resources/msw/kicad.rc b/resources/msw/kicad.rc
+index 0b169889..27115fd8 100644
+--- a/resources/msw/kicad.rc
++++ b/resources/msw/kicad.rc
+@@ -3,11 +3,7 @@
+ 
+ #include "resource.h"
+ 
+-#if KICAD_IS_NIGHTLY
+-IDI_APP_KICAD_ICON ICON "../resources/bitmaps_png/icons/icon_kicad_nightly.ico"
+-#else
+-IDI_APP_KICAD_ICON ICON "../resources/bitmaps_png/icons/icon_kicad.ico"
+-#endif
++IDI_APP_KICAD_ICON ICON "../resources/bitmaps_png/icons/icon_inductive.ico"
+ IDI_FILE_FOOTPRINT_ICON ICON "../resources/bitmaps_png/icons/fileicon_footprint.ico"
+ IDI_FILE_PCB_ICON ICON "../resources/bitmaps_png/icons/fileicon_pcb.ico"
+ IDI_FILE_PROJECT_ICON ICON "../resources/bitmaps_png/icons/fileicon_project.ico"
+@@ -15,7 +11,7 @@ IDI_FILE_SCHEMATIC_ICON ICON "../resources/bitmaps_png/icons/fileicon_schematic.
+ IDI_FILE_SYMBOL_ICON ICON "../resources/bitmaps_png/icons/fileicon_symbol.ico"
+ IDI_FILE_WORKSHEET_ICON ICON "../resources/bitmaps_png/icons/fileicon_worksheet.ico"
+ 
+-#define RC_VER_FILE_DESCRIPTION "KiCad EDA " KICAD_WIN32_RC_PRODVER_STR
+-#define RC_VER_INTERNALNAME "kicad"
+-#define RC_VER_ORIGINALFILENAME "kicad.exe"
++#define RC_VER_FILE_DESCRIPTION "Inductive"
++#define RC_VER_INTERNALNAME "inductive"
++#define RC_VER_ORIGINALFILENAME "inductive.exe"
+ #include "kiwin32.rc"
+diff --git a/resources/msw/kiwin32.rc b/resources/msw/kiwin32.rc
+index 6b72408a..f7e9a002 100644
+--- a/resources/msw/kiwin32.rc
++++ b/resources/msw/kiwin32.rc
+@@ -86,7 +86,7 @@ BEGIN
+             // the exe name
+             VALUE "OriginalFilename", RC_VER_ORIGINALFILENAME
+             // name of distributed package
+-            VALUE "ProductName", "KiCad EDA"
++            VALUE "ProductName", "Inductive (built on KiCad EDA)"
+             VALUE "ProductVersion", KICAD_WIN32_RC_PRODVER_STR
+         END
+     END
+diff --git a/resources/msw/pcbnew.rc b/resources/msw/pcbnew.rc
+index bf59a01c..796edeaf 100644
+--- a/resources/msw/pcbnew.rc
++++ b/resources/msw/pcbnew.rc
+@@ -1,10 +1,10 @@
+ #include "resource.h"
+ 
+-IDI_APP_PCBNEW_ICON ICON "../resources/bitmaps_png/icons/icon_pcbnew.ico"
++IDI_APP_PCBNEW_ICON ICON "../resources/bitmaps_png/icons/icon_inductive.ico"
+ IDI_FILE_FOOTPRINT_ICON ICON "../resources/bitmaps_png/icons/fileicon_footprint.ico"
+ IDI_FILE_PCB_ICON ICON "../resources/bitmaps_png/icons/fileicon_pcb.ico"
+ 
+-#define RC_VER_FILE_DESCRIPTION "KiCad PCB Editor " KICAD_WIN32_RC_PRODVER_STR
+-#define RC_VER_INTERNALNAME "pcbnew"
+-#define RC_VER_ORIGINALFILENAME "pcbnew.exe"
++#define RC_VER_FILE_DESCRIPTION "Inductive PCB"
++#define RC_VER_INTERNALNAME "inductive-pcb"
++#define RC_VER_ORIGINALFILENAME "inductive-pcb.exe"
+ #include "kiwin32.rc"

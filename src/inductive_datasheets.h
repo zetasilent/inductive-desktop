@@ -5,10 +5,14 @@
 #include <wx/base64.h>
 #include <wx/ffile.h>
 #include <wx/file.h>
+#include <cctype>
 #include <filesystem>
 #include <map>
 #ifdef __WXMAC__
 #include <CoreGraphics/CoreGraphics.h>
+#else
+#include <wx/mstream.h>
+#include <wx/zstream.h>
 #endif
 namespace INDUCTIVE_DATASHEETS
 {
@@ -42,6 +46,47 @@ inline std::string Data( const json& file )
         throw std::runtime_error("Corrupt PDF encoding.");
     return std::string(static_cast<const char*>(decoded.GetData()),decoded.GetDataLen());
 }
+#ifndef __WXMAC__
+/// Page count and encryption read from the PDF's structure, where there is no platform
+/// PDF reader: /Type /Page objects in the file and inside its compressed object streams,
+/// and an /Encrypt entry in a trailer or cross-reference stream (both uncompressed).
+inline std::pair<size_t,bool> PdfFacts( const std::string& data )
+{
+    auto pagesIn = []( const std::string& text ) {
+        size_t count = 0;
+        for( size_t at = text.find("/Type"); at != std::string::npos; at = text.find("/Type", at + 5) ) {
+            size_t next = at + 5;
+            while( next < text.size() && std::isspace((unsigned char)text[next]) ) ++next;
+            if( text.compare(next,5,"/Page") == 0 && ( next + 5 >= text.size() || !std::isalpha((unsigned char)text[next + 5]) ) )
+                ++count;
+        }
+        return count;
+    };
+    size_t pages = pagesIn(data);
+    for( size_t at = data.find("/ObjStm"); at != std::string::npos; at = data.find("/ObjStm", at + 7) ) {
+        const size_t dict = data.rfind("<<", at);
+        const size_t stream = data.find("stream", at);
+        if( dict == std::string::npos || stream == std::string::npos || data.substr(dict, stream - dict).find("/FlateDecode") == std::string::npos )
+            continue;
+        size_t begin = stream + 6;
+        if( begin < data.size() && data[begin] == '\r' ) ++begin;
+        if( begin < data.size() && data[begin] == '\n' ) ++begin;
+        const size_t end = data.find("endstream", begin);
+        if( end == std::string::npos ) continue;
+        wxMemoryInputStream raw(data.data() + begin, end - begin);
+        wxZlibInputStream inflate(raw, wxZLIB_ZLIB);
+        std::string objects;
+        char chunk[16384];
+        while( objects.size() < 64 * 1024 * 1024 ) {
+            inflate.Read(chunk, sizeof(chunk));
+            if( !inflate.LastRead() ) break;
+            objects.append(chunk, inflate.LastRead());
+        }
+        pages += pagesIn(objects);
+    }
+    return { pages, data.find("/Encrypt") != std::string::npos };
+}
+#endif
 inline json Inspect( const json& file )
 {
     const auto data = Data(file);
@@ -60,7 +105,11 @@ inline json Inspect( const json& file )
     if( !pages || pages > MAX_PAGES ) throw std::runtime_error("Datasheets must contain 1 to 200 PDF pages.");
     return {{"name",file["name"]},{"kind","datasheet"},{"bytes",data.size()},{"pages",pages},{"mime_type","application/pdf"}};
 #else
-    throw std::runtime_error("PDF datasheet validation is available in the macOS desktop build.");
+    const auto [pages, encrypted] = PdfFacts(data);
+    if( encrypted ) throw std::runtime_error("Upload an unencrypted PDF datasheet.");
+    if( !pages ) throw std::runtime_error("This PDF is damaged or unsupported.");
+    if( pages > MAX_PAGES ) throw std::runtime_error("Datasheets must contain 1 to 200 PDF pages.");
+    return {{"name",file["name"]},{"kind","datasheet"},{"bytes",data.size()},{"pages",pages},{"mime_type","application/pdf"}};
 #endif
 }
 inline json Summary( const json& file )

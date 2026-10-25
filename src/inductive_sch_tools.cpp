@@ -1202,8 +1202,8 @@ static wxString FitFootprint( SCH_SYMBOL* aSymbol, SCH_SHEET_PATH& aSheet, const
                 if( !( *it )[1].str().empty() )
                     aPads.insert( wxString::FromUTF8( ( *it )[1].str() ) );
 
-            return content.Contains( wxS( "(attr smd" ) ) ? wxS( "smd" )
-                   : content.Contains( wxS( "(attr through_hole" ) ) ? wxS( "through_hole" ) : wxString();
+            return content.Contains( wxS( "(attr smd" ) ) ? wxString( wxS( "smd" ) )
+                   : content.Contains( wxS( "(attr through_hole" ) ) ? wxString( wxS( "through_hole" ) ) : wxString();
         };
         auto orientation = []( const wxString& aId )
         {
@@ -2318,9 +2318,9 @@ static wxString OffSeriesNote( const wxString& aRef, const wxString& aValue )
         return wxString();
     const double decade = std::pow( 10.0, std::floor( std::log10( ohms ) + 1e-9 ) );
     const double m = ohms / decade;
-    auto near = []( double a, double b ) { return std::abs( a - b ) <= 0.002 * b; };
-    for( double e : E24 ) if( near( m, e ) || near( m, e * 10 ) ) return wxString();
-    for( double e : e96 ) if( near( m, e ) || near( m, e * 10 ) ) return wxString();
+    auto closeTo = []( double a, double b ) { return std::abs( a - b ) <= 0.002 * b; };
+    for( double e : E24 ) if( closeTo( m, e ) || closeTo( m, e * 10 ) ) return wxString();
+    for( double e : e96 ) if( closeTo( m, e ) || closeTo( m, e * 10 ) ) return wxString();
     double below = e96.front(), above = 10.0;
     for( double e : e96 ) { if( e <= m ) below = e; if( e > m ) { above = e; break; } }
     auto show = []( double aOhms )
@@ -2878,6 +2878,26 @@ static bool LaunchPcbEditor( SCH_EDIT_FRAME* aFrame, const wxString& aBoard )
         }
 
         const wxChar* argv[] = { wxS( "/usr/bin/open" ), wxS( "-a" ), pcb.wc_str(), aBoard.wc_str(), nullptr };
+        return wxExecute( const_cast<wxChar**>( argv ), wxEXEC_ASYNC ) > 0;
+    }
+#elif defined( __WXMSW__ )
+    // <install>\bin\inductive-schematic.exe, beside inductive-pcb.exe
+    wxFileName pcb( wxStandardPaths::Get().GetExecutablePath() );
+    pcb.SetName( wxS( "inductive-pcb" ) );
+
+    if( pcb.FileExists() )
+    {
+        // Already open (KiCad's lock file is beside it): a second editor would warn about
+        // interleaved saves, and the open one picks up the netlist with /layout or /sync.
+        wxFileName lock( aBoard );
+        lock.SetName( FILEEXT::LockFilePrefix + lock.GetName() );
+        lock.SetExt( lock.GetExt() + wxS( "." ) + FILEEXT::LockFileExtension );
+
+        if( lock.FileExists() )
+            return true;
+
+        const wxString path = pcb.GetFullPath();
+        const wxChar*  argv[] = { path.wc_str(), aBoard.wc_str(), nullptr };
         return wxExecute( const_cast<wxChar**>( argv ), wxEXEC_ASYNC ) > 0;
     }
 #endif

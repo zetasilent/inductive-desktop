@@ -10,7 +10,8 @@
 # Distribution outside your own Macs needs Apple's notarization, which needs a
 # "Developer ID Application" certificate (Apple Developer Program). Set both of
 #
-#   INDUCTIVE_DIST_IDENTITY  "Developer ID Application: Name (TEAMID)"
+#   INDUCTIVE_DIST_IDENTITY  the Developer ID Application certificate's SHA-1
+#                            (security find-identity -v -p codesigning)
 #   INDUCTIVE_NOTARY_PROFILE a keychain profile made once with
 #                            `xcrun notarytool store-credentials <profile>`
 #
@@ -57,13 +58,17 @@ NOTARIZE=0
 if [ -n "${INDUCTIVE_DIST_IDENTITY:-}" ] && [ -n "${INDUCTIVE_NOTARY_PROFILE:-}" ]; then
   NOTARIZE=1
   echo "signing for distribution: $INDUCTIVE_DIST_IDENTITY"
-  # Inner bundles first; the hardened runtime is required for notarization.
-  for inner in "$STAGE"/Inductive.app/Contents/Applications/*.app; do
-    [ -d "$inner" ] && ! [ -L "$inner" ] || continue
-    codesign --force --deep --options runtime --timestamp --sign "$INDUCTIVE_DIST_IDENTITY" "$inner"
-  done
-  codesign --force --deep --options runtime --timestamp --sign "$INDUCTIVE_DIST_IDENTITY" "$STAGE/Inductive.app"
-  codesign --verify --deep --strict "$STAGE/Inductive.app"
+  "$REPO/tools/sign-for-distribution.sh" "$STAGE/Inductive.app" "$INDUCTIVE_DIST_IDENTITY"
+  # The app gets its own notarization ticket, so a first launch after dragging it out
+  # of the DMG passes Gatekeeper even offline (the DMG's ticket covers only the DMG).
+  echo "notarizing the app (this waits for Apple)..."
+  ditto -c -k --keepParent "$STAGE/Inductive.app" "$STAGE/app-notarize.zip"
+  xcrun notarytool submit "$STAGE/app-notarize.zip" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" --wait
+  rm -f "$STAGE/app-notarize.zip"
+  xcrun stapler staple "$STAGE/Inductive.app"
+  # Apple's current distribution check. spctl's execute assessment rejects this app
+  # (its editors are apps nested inside it) although Gatekeeper opens it normally.
+  syspolicy_check distribution "$STAGE/Inductive.app"
 fi
 
 # The update every older app installs at launch (tools/publish-update.sh), made

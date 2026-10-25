@@ -6,12 +6,15 @@
  * or Quit. Update downloads the release, checks its SHA-256 against the server's
  * answer, its code signature against the running app's team, and its version
  * against the one offered; then the app quits, a small script swaps the bundles and
- * opens the new one. A check that cannot reach the server lets the app start: the
- * server still refuses model requests from editors below MIN_CLIENT_VERSION.
+ * opens the new one. On Windows the release is the installer: checked against the
+ * server's SHA-256, then run silently into the same folder once Inductive has quit.
+ * A check that cannot reach the server lets the app start: the server still refuses
+ * model requests from editors below MIN_CLIENT_VERSION.
  *
  * Only release builds update themselves: INDUCTIVE_UPDATE_CHANNEL is written into
- * the bundle by `INDUCTIVE_UPDATE_CHANNEL=stable tools/install-app.sh`. A
- * development build has none, so it never replaces itself. macOS only for now.
+ * the bundle by `INDUCTIVE_UPDATE_CHANNEL=stable tools/install-app.sh` (and into
+ * share\kicad\inductive\cloud.env by the Windows package). A development build has
+ * none, so it never replaces itself.
  */
 
 #ifndef INDUCTIVE_UPDATES_H
@@ -47,6 +50,9 @@
 
 #ifdef __WXMAC__
 #include <CommonCrypto/CommonDigest.h>
+#else
+#include <picosha2.h>
+#include <wx/utils.h>
 #endif
 
 #ifndef _WIN32
@@ -100,14 +106,22 @@ inline std::string Quote( const wxString& aText )
 /// Run a command (worker threads only); its exit status, with stdout and stderr in aOutput.
 inline int Run( const std::string& aCommand, std::string* aOutput = nullptr )
 {
+#ifdef _WIN32
+    FILE* pipe = _popen( ( aCommand + " 2>&1" ).c_str(), "r" );
+#else
     FILE* pipe = popen( ( aCommand + " 2>&1" ).c_str(), "r" );
+#endif
     if( !pipe )
         return -1;
     char        buffer[4096];
     std::string output;
     while( size_t n = fread( buffer, 1, sizeof( buffer ), pipe ) )
         output.append( buffer, n );
+#ifdef _WIN32
+    const int status = _pclose( pipe );
+#else
     const int status = pclose( pipe );
+#endif
     if( aOutput )
         *aOutput = output;
     return status;
@@ -125,6 +139,30 @@ inline wxArrayString Folders( const wxString& aPath )
          more = dir.GetNext( &name ) )
         names.Add( name );
     return names;
+}
+
+/// Where downloads wait to be installed: nothing in it is the user's.
+inline wxString UpdatesRoot()
+{
+#ifdef _WIN32
+    wxString local;
+    if( !wxGetEnv( wxS( "LOCALAPPDATA" ), &local ) || local.IsEmpty() )
+        return wxString();
+    return local + wxS( "\\Inductive\\Updates" );
+#else
+    return wxFileName::GetHomeDir() + "/Library/Caches/Inductive/Updates";
+#endif
+}
+
+/// Delete a folder of ours and everything in it.
+inline void RemoveFolder( const wxString& aPath )
+{
+#ifdef _WIN32
+    if( wxDirExists( aPath ) )
+        wxFileName::Rmdir( aPath, wxPATH_RMDIR_RECURSIVE );
+#else
+    Run( "/bin/rm -rf " + Quote( aPath ) );
+#endif
 }
 
 /// SHA-256 of a file in lowercase hex, or empty if it cannot be read.
@@ -150,7 +188,15 @@ inline std::string Sha256( const wxString& aPath )
     }
     return out;
 #else
-    return "";
+    std::ifstream in( aPath.fn_str(), std::ios::binary );
+    if( !in )
+        return "";
+    picosha2::hash256_one_by_one hasher;
+    std::vector<char> buffer( 1 << 20 );
+    while( in.read( buffer.data(), buffer.size() ) || in.gcount() > 0 )
+        hasher.process( buffer.begin(), buffer.begin() + in.gcount() );
+    hasher.finish();
+    return picosha2::get_hash_hex_string( hasher );
 #endif
 }
 
@@ -191,16 +237,21 @@ inline std::optional<RELEASE> Check( const wxString& aChannel )
     const INDUCTIVE_CLOUD_AUTH::CONFIG config = INDUCTIVE_CLOUD_AUTH::LoadConfig();
     if( config.apiBase.IsEmpty() || aChannel.IsEmpty() )
         return std::nullopt;
-#if defined( __aarch64__ ) || defined( __arm64__ )
+#if defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 )
     const char* arch = "arm64";
 #else
     const char* arch = "x86_64";
+#endif
+#ifdef _WIN32
+    const char* platform = "windows";
+#else
+    const char* platform = "macos";
 #endif
     try
     {
         KICAD_CURL_EASY curl;
         curl.SetURL( std::string( INDUCTIVE_CLOUD_AUTH::ApiBaseNormalized( config.apiBase ).utf8_str() )
-                     + "/v1/app/update?platform=macos&arch=" + arch + "&version=" + INDUCTIVE_VERSION
+                     + "/v1/app/update?platform=" + platform + "&arch=" + arch + "&version=" + INDUCTIVE_VERSION
                      + "&channel=" + curl.Escape( std::string( aChannel.utf8_str() ) ) );
         curl.SetHeader( "X-Inductive-Version", INDUCTIVE_VERSION );
         curl.SetConnectTimeout( 4 );
@@ -314,7 +365,11 @@ private:
         else if( aState == "verifying" )
         {
             m_title->SetLabel( _( "Checking the update" ) );
+#ifdef _WIN32
+            m_lead->SetLabel( _( "Making sure the download is complete and is the one Inductive published." ) );
+#else
             m_lead->SetLabel( _( "Making sure the download is complete and signed by Inductive." ) );
+#endif
         }
         else if( aState == "installing" )
         {
@@ -356,18 +411,32 @@ private:
     /// Download, check and stage the update on a worker; the UI hears back through CallAfter.
     void Start()
     {
+#ifdef _WIN32
+        // <install>\bin\<editor>.exe: the installer replaces <install>, and the editor reopens.
+        const wxFileName exe( wxStandardPaths::Get().GetExecutablePath() );
+        wxFileName       root( exe.GetPath(), wxEmptyString );
+        root.RemoveLastDir();
+        const wxString outer = root.GetPath();
+        const wxString launched = exe.GetFullPath();
+        if( UpdatesRoot().IsEmpty() || !wxFileName::FileExists( outer + wxS( "\\uninstall.exe" ) ) )
+        {
+            Post( "error", "Install Inductive with its installer, open it from the Start menu, and update again." );
+            return;
+        }
+#else
         const wxString outer = OuterBundle();
         if( outer.IsEmpty() || outer.Contains( wxS( "/AppTranslocation/" ) ) || outer.StartsWith( wxS( "/Volumes/" ) ) )
         {
             Post( "error", "Move Inductive to your Applications folder, open it from there, and update again." );
             return;
         }
+        const wxString launched = LaunchedBundle();
+#endif
         if( m_worker.joinable() )
             m_worker.join();
         m_busy = true;
         m_cancel = false;
         Post( "downloading" );
-        const wxString launched = LaunchedBundle();
         m_worker = std::thread( [this, outer, launched] { Work( outer, launched ); } );
     }
 
@@ -376,18 +445,12 @@ private:
         CallAfter( [this, aMessage] { m_busy = false; Post( "error", aMessage ); } );
     }
 
-    void Work( const wxString& aOuter, const wxString& aLaunched )
+    /// Download the release to aFile, reporting progress about five times a second.
+    /// False when it did not finish (Fail has been called) or Quit was pressed.
+    bool Download( const wxString& aFile )
     {
-        wxFileName dir( wxFileName::GetHomeDir() + "/Library/Caches/Inductive/Updates/" + m_release.version, "" );
-        // A previous attempt's files go first; nothing in this folder is the user's.
-        Run( "/bin/rm -rf " + Quote( dir.GetPath() ) );
-        if( !wxFileName::Mkdir( dir.GetPath(), 0700, wxPATH_MKDIR_FULL ) )
-            return Fail( "Couldn't make a folder for the download." );
-        const wxString zip = dir.GetPath() + "/update.zip";
-
-        // 1. Download, reporting progress about five times a second.
         {
-            std::ofstream out( std::string( zip.utf8_str() ), std::ios::binary );
+            std::ofstream out( aFile.fn_str(), std::ios::binary );
             KICAD_CURL_EASY curl;
             curl.SetURL( m_release.url );
             curl.SetFollowRedirects( true );
@@ -407,10 +470,97 @@ private:
             const int code = curl.Perform();
             out.close();
             if( m_cancel )
-                return;
+                return false;
             if( code != CURLE_OK || curl.GetResponseStatusCode() != 200 )
-                return Fail( "The download didn't finish. Check your connection and try again." );
+            {
+                Fail( "The download didn't finish. Check your connection and try again." );
+                return false;
+            }
         }
+        return true;
+    }
+
+    void Work( const wxString& aOuter, const wxString& aLaunched )
+    {
+        const wxString dir = UpdatesRoot() + wxFileName::GetPathSeparator() + wxString::FromUTF8( m_release.version );
+        // A previous attempt's files go first; nothing in this folder is the user's.
+        RemoveFolder( dir );
+        if( !wxFileName::Mkdir( dir, 0700, wxPATH_MKDIR_FULL ) )
+            return Fail( "Couldn't make a folder for the download." );
+#ifdef _WIN32
+        WorkWindows( wxFileName( dir, wxEmptyString ), aOuter, aLaunched );
+#else
+        WorkMac( wxFileName( dir, wxEmptyString ), aOuter, aLaunched );
+#endif
+    }
+
+#ifdef _WIN32
+    void WorkWindows( const wxFileName& dir, const wxString& aRoot, const wxString& aLaunched )
+    {
+        // 1. Download the installer.
+        const wxString setup = dir.GetPath() + "\\Inductive-Setup.exe";
+        if( !Download( setup ) )
+            return;
+
+        // 2. It is the file the server named. Quit stays available until the script starts.
+        CallAfter( [this] { if( m_busy ) Post( "verifying" ); } );
+        if( (long long) wxFileName::GetSize( setup ).GetValue() != m_release.size || Sha256( setup ) != m_release.sha256 )
+            return Fail( "The download was damaged. Try again." );
+        if( m_cancel )
+            return;
+
+        // 3. A script waits for this app (and any other Inductive window from this install)
+        //    to quit, runs the installer silently into the same folder -- asking Windows for
+        //    an administrator only for an install for all users -- and opens the app again.
+        const wxString script = dir.GetPath() + "\\install.ps1";
+        std::ofstream( script.fn_str() ) << R"PS(# install.ps1: wait for Inductive to quit, install the update into the same folder, reopen.
+param([int]$AppPid, [string]$Setup, [string]$Root, [string]$Reopen)
+$until = (Get-Date).AddSeconds(60)
+while ((Get-Process -Id $AppPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 100 }
+if (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) { exit 1 }   # still running: offered again next launch
+$bin = Join-Path $Root 'bin'
+function Others { Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($bin, [StringComparison]::OrdinalIgnoreCase) } }
+$until = (Get-Date).AddMinutes(10)
+while ((Others) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 1 }
+if (Others) { exit 1 }
+$probe = Join-Path $Root '.update-probe'
+try { [IO.File]::WriteAllText($probe, ''); Remove-Item $probe; $all = $false } catch { $all = $true }
+try {
+  if ($all) { $p = Start-Process -FilePath $Setup -ArgumentList '/S', '/allusers', "/D=$Root" -Verb RunAs -Wait -PassThru }
+  else { $p = Start-Process -FilePath $Setup -ArgumentList '/S', '/currentuser', "/D=$Root" -Wait -PassThru }
+  if ($p.ExitCode -eq 0) { Remove-Item $Setup -ErrorAction SilentlyContinue }
+} catch { }
+Start-Process -FilePath $Reopen
+)PS";
+        const wxString pid = wxString::Format( wxS( "%lu" ), wxGetProcessId() );
+        CallAfter(
+                [this, script, pid, setup, aRoot, aLaunched]
+                {
+                    // wxExecute belongs to the main thread.
+                    const wxString shell = wxGetOSDirectory() + wxS( "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" );
+                    const wxChar*  argv[] = { shell.wc_str(), wxS( "-NoProfile" ), wxS( "-NonInteractive" ),
+                                              wxS( "-ExecutionPolicy" ), wxS( "Bypass" ), wxS( "-WindowStyle" ),
+                                              wxS( "Hidden" ), wxS( "-File" ), script.wc_str(), wxS( "-AppPid" ),
+                                              pid.wc_str(), wxS( "-Setup" ), setup.wc_str(), wxS( "-Root" ),
+                                              aRoot.wc_str(), wxS( "-Reopen" ), aLaunched.wc_str(), nullptr };
+                    if( m_cancel )
+                        return;
+                    if( wxExecute( const_cast<wxChar**>( argv ), wxEXEC_ASYNC | wxEXEC_HIDE_CONSOLE ) <= 0 )
+                    {
+                        m_busy = false;
+                        Post( "error", "The update couldn't be started. Try again." );
+                        return;
+                    }
+                    Post( "installing" );
+                    EndModal( wxID_OK );
+                } );
+    }
+#else
+    void WorkMac( const wxFileName& dir, const wxString& aOuter, const wxString& aLaunched )
+    {
+        const wxString zip = dir.GetPath() + "/update.zip";
+        if( !Download( zip ) )
+            return;
 
         // 2. It is the file the server named, the build it named, signed by the same team.
         //    Quit stays available, and once pressed nothing below installs anything.
@@ -475,6 +625,7 @@ private:
             return Fail( "The update couldn't be started. Try again." );
         CallAfter( [this] { Post( "installing" ); EndModal( wxID_OK ); } );
     }
+#endif
 
     RELEASE           m_release;
     wxStaticText*     m_title = nullptr;
@@ -495,7 +646,7 @@ private:
  */
 inline void CheckAtLaunch()
 {
-#ifdef __WXMAC__
+#if defined( __WXMAC__ ) || defined( _WIN32 )
     static std::atomic<bool> started{ false };
     if( started.exchange( true ) )
         return;
@@ -508,13 +659,13 @@ inline void CheckAtLaunch()
                 // Downloads and replaced apps of earlier updates; the one that installed
                 // this version (and the app it replaced) stays until the next update.
                 // A newer version's folder may be a download in progress in another window.
-                const wxString cache = wxFileName::GetHomeDir() + "/Library/Caches/Inductive/Updates";
+                const wxString cache = UpdatesRoot();
                 const auto running = ParseVersion( INDUCTIVE_VERSION );
                 for( const wxString& name : Folders( cache ) )
                 {
                     const auto version = ParseVersion( std::string( name.utf8_str() ) );
                     if( version && running && *version < *running )
-                        Run( "/bin/rm -rf " + Quote( cache + "/" + name ) );
+                        RemoveFolder( cache + wxFileName::GetPathSeparator() + name );
                 }
                 std::optional<RELEASE> release = Check( channel );
                 if( !release || !wxTheApp )
