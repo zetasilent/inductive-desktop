@@ -16,11 +16,19 @@
 # KiCad's dependencies with vcpkg and takes hours; later ones reuse them. The installer and
 # its update description land in $Builder\.out:
 #   Inductive-<version>-windows-x86_64-setup.exe and .json (for tools/publish-update.sh)
+#
+# -Sign signs every program and library, then the installer, with Microsoft's Artifact
+# Signing (Trusted Signing): $SigningMetadata names the account and certificate profile,
+# $SigningDlib is Microsoft's signtool plug-in, and the signing identity is whoever is
+# signed in with the Azure CLI on this machine (az login).
 param(
     [string]$Steps = 'build,prepare,package',
     [string]$Builder = 'C:\b\kicad-win-builder',
     [string]$Inductive = 'C:\b\inductive',
-    [string]$CloudEnv = 'C:\b\cloud.env'
+    [string]$CloudEnv = 'C:\b\cloud.env',
+    [switch]$Sign,
+    [string]$SigningMetadata = 'C:\b\signing\metadata.json',
+    [string]$SigningDlib = 'C:\b\signing\Azure.CodeSigning.Dlib.dll'
 )
 $ErrorActionPreference = 'Continue'
 $env:Path = 'C:\Program Files\Git\cmd;' + $env:Path
@@ -70,6 +78,14 @@ $settings | Add-Member -Force NoteProperty UseMsvcCmake $true
 $settings | ConvertTo-Json -Compress | Set-Content $settingsFile
 Remove-Item alias:cmake, alias:ninja -ErrorAction SilentlyContinue
 
+if ($Sign) {
+    if (-not (Test-Path $SigningMetadata)) { Fail "signing needs $SigningMetadata" }
+    if (-not (Test-Path $SigningDlib)) { Fail "signing needs $SigningDlib" }
+    # Read by the builder's Sign-File (kicad-win-builder.patch).
+    $env:INDUCTIVE_SIGNING_METADATA = $SigningMetadata
+    $env:INDUCTIVE_SIGNING_DLIB = $SigningDlib
+}
+
 Set-Location $Builder
 
 $out = "$Builder\.out\x64-windows-Release"
@@ -87,7 +103,7 @@ foreach ($step in $Steps.Split(',')) {
             }
         }
         'prepare' {
-            & .\build.ps1 -PreparePackage -Arch x64 -BuildConfigName inductive
+            & .\build.ps1 -PreparePackage -Arch x64 -BuildConfigName inductive -Sign:$Sign
             if (-not (Test-Path "$out\share\kicad\inductive\web\sidebar.html")) { Fail 'the package has no sidebar' }
             # The release settings: without them the app cannot reach Inductive or update itself.
             if (-not (Select-String -Path $CloudEnv -Pattern '^INDUCTIVE_API_BASE=https://' -Quiet)) { Fail "$CloudEnv has no INDUCTIVE_API_BASE" }
@@ -95,11 +111,16 @@ foreach ($step in $Steps.Split(',')) {
             Copy-Item $CloudEnv "$out\share\kicad\inductive\cloud.env" -Force
         }
         'package' {
-            & .\build.ps1 -Package -Arch x64 -BuildConfigName inductive -Prepare $False
+            & .\build.ps1 -Package -Arch x64 -BuildConfigName inductive -Prepare $False -Sign:$Sign
             $built = Get-ChildItem "$Builder\.out\Inductive-$version-x86_64*.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
             if (-not $built) { Fail 'no installer was made' }
             $file = "Inductive-$version-windows-x86_64-setup.exe"
             Move-Item $built.FullName "$Builder\.out\$file" -Force
+            if ($Sign) {
+                foreach ($signed in "$Builder\.out\$file", "$out\bin\inductive.exe", "$out\bin\inductive-pcb.exe", "$out\bin\inductive-schematic.exe") {
+                    if ((Get-AuthenticodeSignature $signed).Status -ne 'Valid') { Fail "$signed is not validly signed" }
+                }
+            }
             $hash = (Get-FileHash "$Builder\.out\$file" -Algorithm SHA256).Hash.ToLower()
             $size = (Get-Item "$Builder\.out\$file").Length
             # What tools/publish-update.sh publishes: the same shape as the macOS build's.

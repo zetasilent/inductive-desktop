@@ -22,7 +22,26 @@
          }
  
          if ($LastExitCode -ne 0) {
-@@ -1240,7 +1244,7 @@
+@@ -983,6 +987,18 @@
+ 
+     Write-Host "Signing file: $File" -ForegroundColor Blue
+ 
++    # Inductive: Microsoft's Artifact Signing, configured by build-windows.ps1 -Sign.
++    if( $env:INDUCTIVE_SIGNING_METADATA ) {
++        signtool.exe sign /fd sha256 /tr http://timestamp.acs.microsoft.com /td sha256 `
++            /dlib "$env:INDUCTIVE_SIGNING_DLIB" /dmdf "$env:INDUCTIVE_SIGNING_METADATA" /q "$File"
++
++        if ($LastExitCode -ne 0) {
++            Write-Error "Error signing file $File, exit code $LastExitCode"
++            Exit [ExitCodes]::SignFail
++        }
++        return
++    }
++
+     if( $SignAKV ) {
+         azuresigntool sign -kvt "$AKVTenantId" -fd sha256 `
+                             -td sha256 -kvu "$AKVUrl" -kvi "$AKVAppId" `
+@@ -1240,7 +1256,7 @@
          $env:Path = $originalEnvPath
  
          Build-Library-Source -arch $arch -buildType $buildType -libraryFolderName kicad-footprints
@@ -31,7 +50,7 @@
          Build-Library-Source -arch $arch -buildType $buildType -libraryFolderName kicad-templates
  
          if( $hostPython3Path )
-@@ -1251,7 +1255,6 @@
+@@ -1251,7 +1267,6 @@
          $env:Path = $originalEnvPath
  
          Install-Library -arch $arch -buildType $buildType -libraryFolderName kicad-footprints

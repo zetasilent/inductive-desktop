@@ -18,6 +18,14 @@
 # and this script re-signs with the hardened runtime, notarizes and staples.
 # Without them the DMG is still built, and says so: macOS will refuse to open it
 # on another Mac until the tester approves it in Privacy & Security.
+#
+# INDUCTIVE_REPACKAGE_DMG=dist/Inductive-X.Y.Z.dmg makes a new DMG around the app in
+# that one, as it is (already signed and notarized): for a change to the DMG itself.
+# No update zip is made, as the app has not changed.
+#
+# The DMG opens on a window that says what to do: Inductive on the left, an arrow, and
+# Applications on the right (packaging/macos/dmg-background.swift, laid out by
+# tools/dmg-window.py without Finder).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,6 +36,20 @@ if ! git -C "$REPO" describe --exact-match --tags "v$VERSION" >/dev/null 2>&1 ||
   VERSION="$VERSION-$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d)"
 fi
 OUT="${1:-$REPO/dist/Inductive-$VERSION.dmg}"
+
+STAGE="$(mktemp -d)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$STAGE" "$WORK"' EXIT
+mkdir -p "$(dirname "$OUT")"
+
+REPACKAGE="${INDUCTIVE_REPACKAGE_DMG:-}"
+if [ -n "$REPACKAGE" ]; then
+  MOUNTED="$(hdiutil attach -nobrowse -readonly -noautoopen "$REPACKAGE" | awk -F'\t' '/\/Volumes\//{ print $NF }' | tail -1)"
+  APP="$WORK/from-dmg/Inductive.app"
+  ditto "$MOUNTED/Inductive.app" "$APP"
+  hdiutil detach -quiet "$MOUNTED"
+  syspolicy_check distribution "$APP" > /dev/null || { echo "The app in $REPACKAGE is not notarized." >&2; exit 1; }
+fi
 
 if [ ! -d "$APP/Contents/MacOS" ]; then
   echo "No installed app at $APP. Run tools/install-app.sh first." >&2
@@ -46,10 +68,7 @@ fi
 grep -q '^INDUCTIVE_UPDATE_CHANNEL=' "$APP/Contents/SharedSupport/inductive/cloud.env" 2>/dev/null \
   || echo "warning: a development build (no update channel); it will not update itself. Build releases with INDUCTIVE_UPDATE_CHANNEL=stable tools/install-app.sh." >&2
 
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$(dirname "$OUT")"
-
+chmod 755 "$STAGE"   # the DMG's top folder, as people see it
 echo "staging $(du -sh "$APP" | cut -f1) app..."
 ditto "$APP" "$STAGE/Inductive.app"
 ln -s /Applications "$STAGE/Applications"
@@ -57,6 +76,8 @@ ln -s /Applications "$STAGE/Applications"
 NOTARIZE=0
 if [ -n "${INDUCTIVE_DIST_IDENTITY:-}" ] && [ -n "${INDUCTIVE_NOTARY_PROFILE:-}" ]; then
   NOTARIZE=1
+fi
+if [ "$NOTARIZE" = 1 ] && [ -z "$REPACKAGE" ]; then
   echo "signing for distribution: $INDUCTIVE_DIST_IDENTITY"
   "$REPO/tools/sign-for-distribution.sh" "$STAGE/Inductive.app" "$INDUCTIVE_DIST_IDENTITY"
   # The app gets its own notarization ticket, so a first launch after dragging it out
@@ -74,7 +95,9 @@ fi
 # The update every older app installs at launch (tools/publish-update.sh), made
 # from the same signed app as the DMG. Only for an exact release version: the
 # updater compares x.y.z and accepts nothing else.
-if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [ -n "$REPACKAGE" ]; then
+  echo "note: repackaging the app from $(basename "$REPACKAGE"), so no update zip was made."
+elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   BUILD_ID="macos-$(uname -m)"
   ZIP="$(dirname "$OUT")/Inductive-$VERSION-$BUILD_ID.zip"
   rm -f "$ZIP"
@@ -87,10 +110,33 @@ else
   echo "note: $VERSION is not a tagged release, so no update zip was made (tag v<version> on a clean tree)."
 fi
 
+# The window the DMG opens on. The background is drawn at 1x and 2x and joined into one
+# TIFF, so it is sharp on Retina screens; the DMG wears the app's icon.
+mkdir "$STAGE/.background"
+swift "$REPO/packaging/macos/dmg-background.swift" "$WORK/background.png" 1
+swift "$REPO/packaging/macos/dmg-background.swift" "$WORK/background@2x.png" 2
+tiffutil -cathidpicheck "$WORK/background.png" "$WORK/background@2x.png" -out "$STAGE/.background/background.tiff" > /dev/null 2>&1
+cp "$STAGE/Inductive.app/Contents/Resources/inductive.icns" "$STAGE/.VolumeIcon.icns"
+
+# Laid out on a writable copy: tools/dmg-window.py writes the .DS_Store Finder reads
+# (no Finder automation). Icon positions are the centres the background's arrow joins.
+echo "laying out the DMG window..."
+hdiutil create -volname "Inductive" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$WORK/layout.dmg" > /dev/null
+ATTACHED="$(hdiutil attach -readwrite -noverify -noautoopen -nobrowse "$WORK/layout.dmg")"
+DEVICE="$(awk '/Apple_HFS/{ print $1 }' <<< "$ATTACHED")"
+VOLUME="$(awk -F'\t' '/\/Volumes\//{ print $NF }' <<< "$ATTACHED" | tail -1)"
+trap 'hdiutil detach -quiet "$DEVICE" 2>/dev/null; rm -rf "$STAGE" "$WORK"' EXIT
+SetFile -a C "$VOLUME"
+python3 "$REPO/tools/dmg-window.py" "$VOLUME" --background .background/background.tiff \
+  --window 660x428 --icon-size 128 --text-size 13 \
+  --item "Inductive.app=180,200" --item "Applications=480,200"
+sync
+hdiutil detach -quiet "$DEVICE"
+trap 'rm -rf "$STAGE" "$WORK"' EXIT
+
 rm -f "$OUT"
 echo "building $(basename "$OUT")..."
-hdiutil create -volname "Inductive" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 \
-  -ov "$OUT" >/dev/null
+hdiutil convert "$WORK/layout.dmg" -format UDZO -imagekey zlib-level=9 -ov -o "$OUT" > /dev/null
 
 if [ "$NOTARIZE" = 1 ]; then
   codesign --force --sign "$INDUCTIVE_DIST_IDENTITY" --timestamp "$OUT"
