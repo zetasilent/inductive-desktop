@@ -91,6 +91,64 @@ inline void ApplyNetClasses( BOARD* aBoard, const json& aClasses )
 
 
 /**
+ * The board rules the layout engine relaxes (the minimum hole, for a footprint's own vias;
+ * the minimum track and clearance, for fine-pitch parts), from the project file the service
+ * sends back: they are project settings, not in the board file, so without this the open
+ * board keeps the old ones and its DRC flags what the engine allowed. Returns whether any
+ * changed.
+ */
+inline bool ApplyRules( BOARD* aBoard, const std::string& aProjectFile )
+{
+    const json project = json::parse( aProjectFile, nullptr, false );
+    json       rules;
+
+    try
+    {
+        rules = project.at( "board" ).at( "design_settings" ).at( "rules" );
+    }
+    catch( const json::exception& )
+    {
+        return false;
+    }
+
+    if( !rules.is_object() )
+        return false;
+
+    BOARD_DESIGN_SETTINGS& bds = aBoard->GetDesignSettings();
+    bool                   changed = false;
+
+    // Millimetres, as KiCad writes them (PARAM_SCALED, up to 25 mm).
+    auto take = [&]( const char* aKey, int& aValue )
+    {
+        if( !rules.contains( aKey ) || !rules[aKey].is_number() )
+            return;
+
+        const double mm = rules[aKey].get<double>();
+
+        if( mm < 0.0 || mm > 25.0 )
+            return;
+
+        const int value = pcbIUScale.mmToIU( mm );
+
+        if( value != aValue )
+        {
+            aValue = value;
+            changed = true;
+        }
+    };
+
+    take( "min_through_hole_diameter", bds.m_MinThroughDrill );
+    take( "min_track_width", bds.m_TrackMinWidth );
+    take( "min_clearance", bds.m_MinClearance );
+
+    if( changed )
+        INDUCTIVE_BOARD_RULES::RecompileRules( aBoard );
+
+    return changed;
+}
+
+
+/**
  * Take the service board's copper layers (count, types and stackup). Returns whether
  * they changed, so the editor can rebuild its layer controls. Before the items, so
  * pours on new inner layers have them.

@@ -1068,6 +1068,12 @@ static bool RemoteBoardJob( PCB_EDIT_FRAME* aFrame, const std::string& aOp, cons
         }
 
         INDUCTIVE_BOARD_APPLY::ApplyNetClasses( board, out.value( "net_classes", json() ) );
+
+        const std::string pro = std::string( ( name + ".kicad_pro" ).utf8_str() );
+
+        if( out["files"].contains( pro ) && out["files"][pro].is_string() )
+            INDUCTIVE_BOARD_APPLY::ApplyRules( board, out["files"][pro].get<std::string>() );
+
         ApplyBoard( aFrame, fresh.get(), aTitle );
     }
 
