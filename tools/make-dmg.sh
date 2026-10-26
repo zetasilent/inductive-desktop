@@ -147,14 +147,17 @@ cp "$STAGE/Inductive.app/Contents/Resources/inductive.icns" "$STAGE/.VolumeIcon.
 
 # Laid out on a writable copy: tools/dmg-window.py writes the .DS_Store Finder reads
 # (no Finder automation). Icon positions are the centres the background's arrow joins.
-echo "laying out the DMG window..."
-hdiutil create -volname "Inductive" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$WORK/layout.dmg" > /dev/null
+# The disk is named for the app's version: Finder finds the background by the disk's
+# name, and an older Inductive DMG still mounted under the plain name hid the arrow.
+DISK="Inductive $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGE/Inductive.app/Contents/Info.plist")"
+echo "laying out the DMG window ($DISK)..."
+hdiutil create -volname "$DISK" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$WORK/layout.dmg" > /dev/null
 ATTACHED="$(hdiutil attach -readwrite -noverify -noautoopen -nobrowse "$WORK/layout.dmg")"
 DEVICE="$(awk '/Apple_HFS/{ print $1 }' <<< "$ATTACHED")"
 VOLUME="$(awk -F'\t' '/\/Volumes\//{ print $NF }' <<< "$ATTACHED" | tail -1)"
 trap 'hdiutil detach -quiet "$DEVICE" 2>/dev/null; rm -rf "$STAGE" "$WORK"' EXIT
 SetFile -a C "$VOLUME"
-python3 "$REPO/tools/dmg-window.py" "$VOLUME" --background .background/background.tiff \
+python3 "$REPO/tools/dmg-window.py" "$VOLUME" --volume-name "$DISK" --background .background/background.tiff \
   --window 660x428 --icon-size 128 --text-size 13 \
   --item "Inductive.app=180,200" --item "Applications=480,200"
 sync

@@ -135,7 +135,8 @@ def main():
     parser.add_argument("--icon-size", type=float, default=128)
     parser.add_argument("--text-size", type=float, default=13)
     parser.add_argument("--item", action="append", default=[])
-    parser.add_argument("--volume-name", default="Inductive")
+    parser.add_argument("--volume-name", default="Inductive",
+                        help="the disk's name (not its mount point, which gains a number when taken)")
     args = parser.parse_args()
 
     width, height = (int(v) for v in args.window.split("x"))
