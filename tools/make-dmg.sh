@@ -78,6 +78,32 @@ NOTARIZE=0
 if [ -n "${INDUCTIVE_DIST_IDENTITY:-}" ] && [ -n "${INDUCTIVE_NOTARY_PROFILE:-}" ]; then
   NOTARIZE=1
 fi
+# Send a file to Apple's notary service and wait for the verdict. Sending and waiting are
+# retried: a dropped connection while Apple works (about ten minutes) would otherwise end
+# the script and take the signed app in the temporary folder with it.
+notarize() {
+  local sent="" id="" verdict="" tries=0
+  until sent="$(xcrun notarytool submit "$1" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" --output-format json)"; do
+    tries=$((tries + 1)); [ "$tries" -lt 5 ] || return 1
+    echo "sending again in a minute ($tries)..."; sleep 60
+  done
+  id="$(sed -nE 's/.*"id" *: *"([^"]+)".*/\1/p' <<< "$sent")"
+  [ -n "$id" ] || { echo "no submission id in: $sent" >&2; return 1; }
+  echo "submitted: $id"
+  tries=0
+  until verdict="$(xcrun notarytool wait "$id" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" --output-format json 2>&1)" \
+          && grep -q '"status" *: *"Accepted"' <<< "$verdict"; do
+    if grep -qE '"status" *: *"(Invalid|Rejected)"' <<< "$verdict"; then
+      echo "$verdict" >&2
+      xcrun notarytool log "$id" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" >&2 || true
+      return 1
+    fi
+    tries=$((tries + 1)); [ "$tries" -lt 30 ] || { echo "$verdict" >&2; return 1; }
+    echo "asking Apple again in a minute ($tries)..."; sleep 60
+  done
+  echo "accepted: $id"
+}
+
 if [ "$NOTARIZE" = 1 ] && [ -z "$REPACKAGE" ]; then
   echo "signing for distribution: $INDUCTIVE_DIST_IDENTITY"
   "$REPO/tools/sign-for-distribution.sh" "$STAGE/Inductive.app" "$INDUCTIVE_DIST_IDENTITY"
@@ -85,7 +111,7 @@ if [ "$NOTARIZE" = 1 ] && [ -z "$REPACKAGE" ]; then
   # of the DMG passes Gatekeeper even offline (the DMG's ticket covers only the DMG).
   echo "notarizing the app (this waits for Apple)..."
   ditto -c -k --keepParent "$STAGE/Inductive.app" "$STAGE/app-notarize.zip"
-  xcrun notarytool submit "$STAGE/app-notarize.zip" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" --wait
+  notarize "$STAGE/app-notarize.zip"
   rm -f "$STAGE/app-notarize.zip"
   xcrun stapler staple "$STAGE/Inductive.app"
   # Apple's current distribution check. spctl's execute assessment rejects this app
@@ -142,7 +168,7 @@ hdiutil convert "$WORK/layout.dmg" -format UDZO -imagekey zlib-level=9 -ov -o "$
 if [ "$NOTARIZE" = 1 ]; then
   codesign --force --sign "$INDUCTIVE_DIST_IDENTITY" --timestamp "$OUT"
   echo "notarizing (this waits for Apple)..."
-  xcrun notarytool submit "$OUT" --keychain-profile "$INDUCTIVE_NOTARY_PROFILE" --wait
+  notarize "$OUT"
   xcrun stapler staple "$OUT"
   spctl -a -t open --context context:primary-signature -v "$OUT"
   echo "PASS -- notarized: $OUT ($(du -h "$OUT" | cut -f1))"
