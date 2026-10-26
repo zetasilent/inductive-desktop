@@ -170,7 +170,8 @@ then
 
   # A build for an older macOS says so, and an even older Mac then explains instead of
   # failing to start (CMAKE_OSX_DEPLOYMENT_TARGET, set by INDUCTIVE_MACOS_MIN).
-  MIN_MACOS="$(sed -nE 's/^CMAKE_OSX_DEPLOYMENT_TARGET:STRING=(.+)$/\1/p' "$BUILD/CMakeCache.txt")"
+  # Given on the command line it is cached as UNINITIALIZED, not STRING.
+  MIN_MACOS="$(sed -nE 's/^CMAKE_OSX_DEPLOYMENT_TARGET:[A-Z]+=(.+)$/\1/p' "$BUILD/CMakeCache.txt")"
   if [ -n "$MIN_MACOS" ]; then
     for plist in "$DEST/Inductive.app/Contents/Info.plist" "$DEST"/Inductive.app/Contents/Applications/*.app/Contents/Info.plist; do
       [ -f "$plist" ] || continue
