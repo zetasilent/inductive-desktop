@@ -14,11 +14,13 @@
 #include <board_commit.h>
 #include <board_design_settings.h>
 #include <board_stackup_manager/board_stackup.h>
+#include <component_classes/component_class.h>
 #include <footprint.h>
 #include <netclass.h>
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_field.h>
+#include <pcb_group.h>
 #include <pcb_track.h>
 #include <project/net_settings.h>
 #include <zone.h>
@@ -28,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 
 namespace INDUCTIVE_BOARD_APPLY
 {
@@ -188,20 +191,51 @@ inline void StageItems( BOARD* aBoard, BOARD_COMMIT& aCommit, BOARD* aFresh )
     };
 
     // A copy of the server's item with this board's nets (read while the server's board lives).
+    // Groups and component classes belong to a board, so the copy has no group and its
+    // footprint classes are found again by name here, as loading a file does: the server's
+    // board, which the clone points into, is freed when this merge ends (crashes in DRC,
+    // autosave and the viewers after /layout, 2026-10-25).
     auto copyOf = [&]( BOARD_ITEM* aItem )
     {
         auto* copy = static_cast<BOARD_ITEM*>( aItem->Clone() );
+        copy->SetParentGroup( nullptr );
 
         if( auto* connected = dynamic_cast<BOARD_CONNECTED_ITEM*>( copy ) )
             connected->SetNet( netFor( connected->GetNetname() ) );
 
         if( copy->Type() == PCB_FOOTPRINT_T )
         {
-            for( PAD* pad : static_cast<FOOTPRINT*>( copy )->Pads() )
+            auto* footprint = static_cast<FOOTPRINT*>( copy );
+
+            for( PAD* pad : footprint->Pads() )
                 pad->SetNet( netFor( pad->GetNetname() ) );
+
+            std::unordered_set<wxString> classes;
+
+            if( const COMPONENT_CLASS* served = static_cast<FOOTPRINT*>( aItem )->GetStaticComponentClass() )
+            {
+                for( const COMPONENT_CLASS* part : served->GetConstituentClasses() )
+                    classes.insert( part->GetName() );
+            }
+
+            footprint->ResolveComponentClassNames( board, classes );
         }
 
         return copy;
+    };
+
+    // aCopy takes aExisting's place, in its group too, as KiCad's footprint exchange does.
+    auto replace = [&]( BOARD_ITEM* aExisting, BOARD_ITEM* aCopy )
+    {
+        if( EDA_GROUP* group = aExisting->GetParentGroup() )
+        {
+            commit.Modify( group->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
+            group->RemoveItem( aExisting );
+            group->AddItem( aCopy );
+        }
+
+        commit.Remove( aExisting );
+        commit.Add( aCopy );
     };
 
     auto sameFill = []( ZONE* aA, ZONE* aB )
@@ -238,8 +272,7 @@ inline void StageItems( BOARD* aBoard, BOARD_COMMIT& aCommit, BOARD* aFresh )
 
         if( now->Type() != item->Type() )
         {
-            commit.Remove( now );
-            commit.Add( copyOf( item ) );
+            replace( now, copyOf( item ) );
             continue;
         }
 
@@ -252,6 +285,16 @@ inline void StageItems( BOARD* aBoard, BOARD_COMMIT& aCommit, BOARD* aFresh )
 
         if( same )
             continue;
+
+        // An item with children (a footprint's pads, fields and graphics; a table's cells) is
+        // replaced, as KiCad's own footprint exchange does: swapping its data and deleting
+        // the copy would free the original children while connectivity and the view still
+        // point at them.
+        if( dynamic_cast<BOARD_ITEM_CONTAINER*>( now ) )
+        {
+            replace( now, copyOf( item ) );
+            continue;
+        }
 
         BOARD_ITEM* copy = copyOf( item );
         commit.Modify( now );
