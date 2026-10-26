@@ -22,6 +22,8 @@ Then export the files your fab needs.
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-2F80ED)](LICENSE)
 [![macOS build](https://github.com/zetasilent/inductive-desktop/actions/workflows/macos.yml/badge.svg)](https://github.com/zetasilent/inductive-desktop/actions/workflows/macos.yml)
 
+**[Website](https://www.useinductive.com)** · **[Download](#download)** · **[How it works](#how-it-works)** · **[Build from source](#building-from-source)**
+
 <br>
 
 <img src="docs/schematic.jpg" alt="The schematic editor with the Inductive sidebar: one prompt, &quot;ESP32-C3 weather station, USB-C, BME280&quot;, drew the full schematic" width="100%">
