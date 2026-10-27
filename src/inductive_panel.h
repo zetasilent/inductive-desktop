@@ -27,10 +27,12 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <map>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -553,6 +555,8 @@ private:
     /// showing it as under way.
     unsigned             m_signInAttempt = 0;
     bool                 m_signInPending = false;
+    /// When /redeem last opened Stripe checkout: the plan is read again on coming back.
+    std::optional<std::chrono::steady_clock::time_point> m_checkoutOpened;
     /// The frame whose activation is watched; unbound again on destruction.
     wxWindow*            m_activateSource = nullptr;
     /// The last auth event, replayed to a navigation pane that loads after it.

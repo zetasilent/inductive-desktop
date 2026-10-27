@@ -1082,11 +1082,11 @@
         continue;
       }
 
-      // heading
-      var h = /^\s*(#{1,3})\s+(.*)$/.exec(line);
+      // heading; #### and smaller are drawn as ### (the model writes them in long answers)
+      var h = /^\s*(#{1,6})\s+(.*)$/.exec(line);
       if (h) {
         closePara(); closeList();
-        var hEl = el("h" + h[1].length);
+        var hEl = el("h" + Math.min(h[1].length, 3));
         renderInline(hEl, h[2]);
         host.appendChild(hEl);
         i++; continue;
@@ -1475,10 +1475,17 @@
     btn.onclick = why.run || null;
   }
 
-  /* Commands the page answers itself. None now: design review was removed; /erc, /check
-     and /drc remain as the editors' own commands. */
+  /* Commands the page answers itself: /learn, a lesson in Learn mode (read-only, no
+     Agent turn). /erc, /check and /drc are the editors' own commands. */
   function localCommands() {
-    return [];
+    return [{ name: "Learn", hint: "What's going on in this design, explained step by step. /learn <topic> for one thing", local: true }];
+  }
+  var LEARN = /^\/learn(?:\s+([\s\S]+))?$/i;
+
+  /* /learn uses no Agent turns: having none left does not stop it. Signing in still does. */
+  function learnBlocked() {
+    if (account.settled && account.configured && account.status === "signed_in" && account.canStartTurn === false) return null;
+    return blocked();
   }
   function localCommand(name) {
     return localCommands().filter(function (c) { return c.name.toLowerCase() === String(name).toLowerCase(); })[0];
@@ -1486,6 +1493,7 @@
 
   /* A typed "/name" naming one of this editor's commands. */
   function isCommandText(v) {
+    if (LEARN.test(String(v).trim())) return true;
     var typed = /^\/([A-Za-z]+)$/.exec(String(v).trim());
     return !!typed && (!!localCommand(typed[1]) || COMMANDS.some(function (c) {
       return c.name.toLowerCase() === typed[1].toLowerCase();
@@ -1510,11 +1518,12 @@
 
   /* replay: a saved turn being redrawn -- { events, seconds, images } -- fed through
      exactly the code that draws a live one, so a reopened chat looks the same. */
-  function submit(text, command, replay) {
+  /* turnMode: a mode for this turn only, instead of the one selected (/learn's "learn"). */
+  function submit(text, command, replay, turnMode) {
     if (!replay) {
       if (busy) return;
       // Prompts only; a command, or a saved chat being redrawn, always proceeds.
-      if (!command && blocked()) {
+      if (!command && (turnMode === "learn" ? learnBlocked() : blocked())) {
         renderGate();
         var g = document.getElementById("gate");
         g.style.animation = "none"; void g.offsetWidth; g.style.animation = "";
@@ -1642,7 +1651,7 @@
     function finishTurn() {
       flushNow();
       finish(reply, t0, trace, replay ? replay.seconds : null, {
-        text:text, command:command,
+        text:text, command:command, turnMode:turnMode,
         allowed:!appliedChanges && !sent.length && !(replay && replay.images && replay.images.length)
       });
     }
@@ -1717,7 +1726,7 @@
       ? commandTurn(command, onEvent)
       : streamTurn({
           prompt: text,
-          mode: mode.toLowerCase(),
+          mode: (turnMode || mode).toLowerCase(),
           attachments: sent.map(function (a) {
             return { name: a.name, type: a.type, url: a.url, text: a.text };
           })
@@ -1758,7 +1767,7 @@
       }));
     if(retry && retry.allowed)actions.appendChild(iconAction("Retry",
       '<path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8"/><path d="M13.7 3.1v2.6h-2.6"/>',
-      function () { if(!busy && retry.text)submit(retry.text,retry.command); }));
+      function () { if(!busy && retry.text)submit(retry.text,retry.command,null,retry.turnMode); }));
     reply.appendChild(actions);
     scroll();
   }
@@ -1992,8 +2001,12 @@
   document.getElementById("btnHistory").onclick=function(){document.getElementById("historyPanel").hidden=false;historyEntries=[];historyRequest("workflow_history");};
   document.getElementById("historyClose").onclick=function(){document.getElementById("historyPanel").hidden=true;};
   /* "/review" as a chat turn: the user's line, then the review as the reply. */
-  function runLocalCommand(name) {
+  function runLocalCommand(name, topic) {
     if (busy || workflowPending) return;
+    if (name.toLowerCase() === "learn") {
+      submit("/learn" + (topic ? " " + topic : ""), null, null, "learn");
+      return;
+    }
     if (name.toLowerCase() !== "review") return;
     var thread = document.getElementById("thread");
     var blank = thread.querySelector(".empty");
@@ -2767,6 +2780,16 @@
     if (busy) return;
     var v = input.value.trim();
     if (pendingFiles || (!v && !attachments.length)) return;
+
+    /* "/learn", or "/learn <topic>": a lesson about this design. */
+    var learn = LEARN.exec(v);
+    if (learn && !attachments.length) {
+      input.value = "";
+      closeSlash();
+      autosize();
+      runLocalCommand("learn", learn[1] ? learn[1].trim() : "");
+      return;
+    }
 
     /* A typed "/place" is the command even if the palette was dismissed first;
        otherwise it would go to the model as two words of text. */

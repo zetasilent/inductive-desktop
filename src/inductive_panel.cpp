@@ -1090,6 +1090,14 @@ void INDUCTIVE_PANEL::onFrameActivate( wxActivateEvent& aEvent )
         ++m_signInAttempt;
         emitAuthStatus();
     }
+
+    // Back from Stripe checkout (or still on the way): the plan may have changed, and a
+    // sidebar out of turns waits on it. For half an hour after checkout was opened.
+    if( aEvent.GetActive() && m_checkoutOpened
+        && std::chrono::steady_clock::now() - *m_checkoutOpened < std::chrono::minutes( 30 ) )
+    {
+        refreshEntitlementAsync();
+    }
 }
 
 
@@ -1360,14 +1368,21 @@ bool INDUCTIVE_PANEL::redeemPromo( const wxString& aText )
 
     emitEvent( nlohmann::json{ { "type", "trace" }, { "verb", "Redeeming" }, { "object", code } }.dump() );
 
+    // A code made in Stripe discounts a subscription: the server answers with a Stripe
+    // checkout for its plan, the code applied, which returns to the plans page.
+    const auto        cfg = INDUCTIVE_CLOUD_AUTH::LoadConfig();
+    const std::string plans( PlansPageUrl( cfg, "", "" ).utf8_str() );
+    const std::string request = nlohmann::json{ { "code", code },
+                                                { "successUrl", plans + "&status=success" },
+                                                { "cancelUrl", plans + "&status=canceled" } }
+                                        .dump();
+
     auto state = m_state;
 
     std::thread(
-            [this, state, code, answer]()
+            [this, state, code, request, answer]()
             {
-                const auto resp = INDUCTIVE_CLOUD_AUTH::ApiRequest(
-                        wxS( "POST" ), wxS( "/v1/billing/redeem" ),
-                        nlohmann::json{ { "code", code } }.dump() );
+                const auto resp = INDUCTIVE_CLOUD_AUTH::ApiRequest( wxS( "POST" ), wxS( "/v1/billing/redeem" ), request );
 
                 wxAppConsole* app = wxTheApp;
 
@@ -1395,6 +1410,26 @@ bool INDUCTIVE_PANEL::redeemPromo( const wxString& aText )
                                     { "pro", "Pro" }, { "max", "Max" }, { "ultra", "Ultra" } };
                                 const std::string plan = body.value( "plan", std::string( "pro" ) );
                                 const auto        name = names.count( plan ) ? names.at( plan ) : plan;
+                                const std::string url = body.value( "url", std::string() );
+
+                                if( body.value( "checkout", false ) )
+                                {
+                                    if( url.rfind( "https://checkout.stripe.com/", 0 ) != 0
+                                        || !wxLaunchDefaultBrowser( wxString::FromUTF8( url ) ) )
+                                    {
+                                        answer( "Couldn't open Stripe checkout in your browser. Open Plans & billing, "
+                                                "choose " + name + ", and enter " + code + " on the payment page.",
+                                                true );
+                                        return;
+                                    }
+
+                                    m_checkoutOpened = std::chrono::steady_clock::now();
+                                    answer( "Opening Stripe checkout for " + name + " with "
+                                                    + body.value( "code", code ) + " applied. Finish there; "
+                                                    "Inductive switches to " + name + " once Stripe confirms.",
+                                            false );
+                                    return;
+                                }
 
                                 answer( "Code " + body.value( "code", code ) + " applied: you're on " + name + " until "
                                                 + ReadableDate( body.value( "endsAt", std::string() ) )
@@ -1764,7 +1799,8 @@ void INDUCTIVE_PANEL::stopTurn()
  */
 static bool modeAllowsMutation( const wxString& aMode )
 {
-    return aMode.CmpNoCase( wxS( "ask" ) ) != 0 && aMode.CmpNoCase( wxS( "plan" ) ) != 0;
+    return aMode.CmpNoCase( wxS( "ask" ) ) != 0 && aMode.CmpNoCase( wxS( "plan" ) ) != 0
+           && aMode.CmpNoCase( wxS( "learn" ) ) != 0;
 }
 
 
@@ -3194,7 +3230,8 @@ void INDUCTIVE_PANEL::runPipelineTurn( unsigned aTurn )
 
     wxString mode = m_mode.Lower();
 
-    if( mode != wxS( "plan" ) && mode != wxS( "ask" ) )
+    // learn: /learn's lesson, read-only like ask.
+    if( mode != wxS( "plan" ) && mode != wxS( "ask" ) && mode != wxS( "learn" ) )
         mode = wxS( "agent" );
 
     nlohmann::json request = {
