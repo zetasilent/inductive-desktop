@@ -229,8 +229,8 @@ static std::string friendlyError( int aStatus, const std::string& aRaw, int aLev
 
     if( code == "turn_ended" )
     {
-        return "This request ran out of model rounds. Send it again to continue from the "
-               "current design.";
+        return "This request reached the limit for one request and stopped. What it changed "
+               "is kept in the design.";
     }
 
     if( code == "quota_exhausted" )
@@ -1839,8 +1839,13 @@ static std::string contentNonce()
  * loop -- look at the board, place a part, check the clearance, move it, run DRC,
  * fix what it reported -- and each pass is a round.  A model can request several
  * calls in one round, so this is a bound on *conversation* turns, not on edits.
+ *
+ * A request runs to the end in one go: the user never types "continue". This is a
+ * guard against a model going round in circles, far above what real work takes (a
+ * twenty-part board is about six rounds; at 32 long edits did stop part-way). The
+ * server allows more (TURN_MAX_ROUNDS), so it is this guard that stops a runaway.
  */
-static const int MAX_TOOL_ROUNDS = 32;
+static const int MAX_TOOL_ROUNDS = 100;
 
 /**
  * How many document-changing calls one turn may make.
@@ -1849,10 +1854,11 @@ static const int MAX_TOOL_ROUNDS = 32;
  * model that has decided to delete things delete a great many of them.  Every
  * change is a separate undo step, so recovery is possible either way -- but only
  * if the user notices, and a hundred silent edits is not something anyone
- * reviews.  Sixty is comfortably more than a real request needs (placing a
- * twenty-part board is twenty calls) and far less than a runaway loop produces.
+ * reviews.  Three hundred is far more than a real request needs (placing a
+ * twenty-part board is twenty calls; a large rework a few hundred at most) and far
+ * less than a runaway loop produces.
  */
-static const int MAX_TURN_MUTATIONS = 60;
+static const int MAX_TURN_MUTATIONS = 300;
 
 /**
  * How many tool calls one round may actually run.
@@ -2883,6 +2889,7 @@ void INDUCTIVE_PANEL::beginTurn( const wxString& aPrompt, const wxString& aMode,
     m_turnLevel         = m_intelligence;
     m_serverTurnId.clear();
     m_mutationsThisTurn = 0;
+    m_retriedEmptyReply = false;
     m_busy              = true;
     m_turnStart         = m_history.size();
 
@@ -4020,13 +4027,22 @@ void INDUCTIVE_PANEL::runTurn( unsigned aTurn )
                             m_serverTurnId = error.empty() ? serverTurn : std::string();
 
                             // Tools ran, then the model said nothing: the work is in the
-                            // design and only its summary is missing. "Try rephrasing"
-                            // would read as though nothing happened. Say what the tools
-                            // did, from their own results, and keep the turn so that
-                            // "continue" picks up from it.
+                            // design and only its summary is missing. Ask once more, on
+                            // the same server turn (no second turn is counted): the reply
+                            // usually comes the second time. Only then say what the tools
+                            // did, from their own results; "try rephrasing" would read as
+                            // though nothing happened.
                             if( !error.empty() && emptyReply && m_toolRounds > 0 )
                             {
-                                const std::string summary = toolStepsSummary();
+                                if( !m_retriedEmptyReply )
+                                {
+                                    m_retriedEmptyReply = true;
+                                    m_serverTurnId      = serverTurn;
+                                    runTurn( turn );
+                                    return;
+                                }
+
+                                const std::string summary = toolStepsSummary( "I stopped before writing a reply." );
                                 m_history.push_back(
                                         nlohmann::json{ { "role", "model" },
                                                         { "parts", nlohmann::json::array(
@@ -4079,8 +4095,19 @@ void INDUCTIVE_PANEL::runTurn( unsigned aTurn )
                             {
                                 // Drop the model turn we cannot answer: nothing else
                                 // removes it, and every later request replays the
-                                // history verbatim, functionCall included.
+                                // history verbatim, functionCall included. What was done
+                                // stands in for it, so the next request knows.
                                 m_history.pop_back();
+                                const std::string summary = toolStepsSummary(
+                                        "I stopped this request: it was still going after "
+                                        + std::to_string( MAX_TOOL_ROUNDS )
+                                        + " rounds, far more than a request needs, so something "
+                                          "kept it from finishing." );
+                                m_history.push_back(
+                                        nlohmann::json{ { "role", "model" },
+                                                        { "parts", nlohmann::json::array(
+                                                                           { { { "text", summary } } } ) } }
+                                                .dump() );
                                 m_busy = false;
                                 dropImageData();
 
@@ -4094,13 +4121,9 @@ void INDUCTIVE_PANEL::runTurn( unsigned aTurn )
                                 // "done" rather than "error": the page renders an
                                 // error by rejecting the turn, which prints transport
                                 // copy that would be wrong here.
-                                emitEvent( nlohmann::json{
-                                        { "type", "done" },
-                                        { "text", "I ran out of steps for this request before "
-                                                  "finishing. What I changed so far is kept; "
-                                                  "reply \"continue\" and I'll pick up where "
-                                                  "I stopped." } }
-                                                   .dump() );
+                                emitEvent( nlohmann::json{ { "type", "done" }, { "text", summary } }
+                                                   .dump( -1, ' ', false,
+                                                          nlohmann::json::error_handler_t::replace ) );
                                 return;
                             }
 
@@ -4206,7 +4229,7 @@ std::string INDUCTIVE_PANEL::ercNoteAfterTurn( const std::string& aParts )
 }
 
 
-std::string INDUCTIVE_PANEL::toolStepsSummary() const
+std::string INDUCTIVE_PANEL::toolStepsSummary( const std::string& aLead ) const
 {
     std::vector<std::string> steps;
 
@@ -4232,17 +4255,17 @@ std::string INDUCTIVE_PANEL::toolStepsSummary() const
         }
     }
 
-    std::string out = "I stopped before writing a reply.";
+    std::string out = aLead;
 
     if( steps.empty() )
-        return out + " Nothing in the design was changed. Try asking again.";
+        return out + " Nothing in the design was changed.";
 
     out += " My last steps, kept in the design (Undo takes the whole request back):\n";
 
     for( size_t i = steps.size() > 4 ? steps.size() - 4 : 0; i < steps.size(); ++i )
         out += steps[i] + "\n";
 
-    return out + "Reply \"continue\" and I'll pick up from here.";
+    return out;
 }
 
 

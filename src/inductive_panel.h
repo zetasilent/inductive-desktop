@@ -484,6 +484,7 @@ private:
 
     /// How many tool rounds the current turn has taken, to bound a runaway loop.
     int                                              m_toolRounds;
+    bool                                             m_retriedEmptyReply = false;   ///< this turn asked again after an empty reply
 
     // ── chat history: saved per project, on this machine only ─────────────
 
@@ -493,7 +494,8 @@ private:
     void requestBoundary( bool aBegin );
     /// When the model stops without a reply after running tools: what the tools did,
     /// from their own results in this turn's record.
-    std::string toolStepsSummary() const;
+    /// What this turn's tools did, after aLead: for a turn that ends without the model's reply.
+    std::string toolStepsSummary( const std::string& aLead ) const;
 
     /**
      * After a turn that changed the schematic: ERC errors it left, if the reply did
